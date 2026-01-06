@@ -267,6 +267,13 @@ It's very important that Claude Code is **token efficient and maximally intellig
 
 6. **The orchestrator doesn't need to actually see the outputs. It trusts the stages of the process.**
 
+7. **Chunked writing to avoid output token limits.** Sub-agents must write their output in ~5k token chunks, flushing to the file after each chunk before continuing. This prevents hitting the 8k output token limit. Pattern:
+   - Write first ~5k tokens to file
+   - Flush/save the file
+   - Continue writing next ~5k tokens (appending or editing)
+   - Repeat until complete
+   - This ensures no work is lost to token limits
+
 ### Stage 1: Initial Parallel Drafting
 
 - 6 Opus sub-agents draft detailed plans to solve the entire objective **with concrete implementation details**
