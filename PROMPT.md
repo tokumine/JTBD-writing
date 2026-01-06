@@ -891,7 +891,7 @@ It's very important that Claude Code is **token efficient and maximally intellig
 
 3. **Orchestrator never reads sub-agent output files.** The orchestrator passes file paths to the next stage. It does NOT use the Read tool on output files. Sub-agents in later stages read the files they need.
 
-4. **Persisted files are stored in `plans/`** and git pushed after each stage.
+4. **Persisted files are stored in `plans/`**. The user will handle git commits manually.
 
 5. **Parallelism generates multiple versions of identical work**, allowing exploration of the solution space. Each prompt to a parallel sub-agent group should be identical.
 
@@ -915,11 +915,11 @@ It's very important that Claude Code is **token efficient and maximally intellig
 
 Launch 6 parallel sub-agents with identical prompts. Each sub-agent:
 - Reads PROMPT.md for full context
-- Drafts a detailed plan with concrete implementation details
+- Drafts a detailed implementation plan
 - Writes to assigned file: `plans/draft_plan_N.md` (where N is 1-6)
 - Returns ONLY: `Done. Output: plans/draft_plan_N.md`
 
-**Orchestrator action:** Launch 6 Task agents in parallel, then git add/commit/push plans/.
+**Orchestrator action:** Launch 6 Task agents in parallel.
 
 ### Stage 2: Parallel Critique & Rewrite
 
@@ -929,7 +929,7 @@ Launch 6 parallel sub-agents. Each sub-agent:
 - Writes improved version to: `plans/critique_N.md`
 - Returns ONLY: `Done. Output: plans/critique_N.md`
 
-**Orchestrator action:** Launch 6 Task agents in parallel, then git add/commit/push plans/.
+**Orchestrator action:** Launch 6 Task agents in parallel.
 
 ### Stage 3: Master Plan Synthesis
 
@@ -939,7 +939,7 @@ Launch 1 sub-agent:
 - Writes to: `plans/master_plan_draft.md`
 - Returns ONLY: `Done. Output: plans/master_plan_draft.md`
 
-**Orchestrator action:** Launch 1 Task agent, then git add/commit/push plans/.
+**Orchestrator action:** Launch 1 Task agent.
 
 ### Stage 4: Parallel Implementation Simulation
 
@@ -950,7 +950,7 @@ Launch 6 parallel sub-agents with identical prompts. Each sub-agent:
 - Writes to: `plans/simulation_N.md`
 - Returns ONLY: `Done. Output: plans/simulation_N.md`
 
-**Orchestrator action:** Launch 6 Task agents in parallel, then git add/commit/push plans/.
+**Orchestrator action:** Launch 6 Task agents in parallel.
 
 ### Stage 5: Final Master Plan Improvement
 
@@ -960,7 +960,7 @@ Launch 1 sub-agent:
 - Writes to: `plans/master_plan_final.md`
 - Returns ONLY: `Done. Output: plans/master_plan_final.md`
 
-**Orchestrator action:** Launch 1 Task agent, then git add/commit/push plans/.
+**Orchestrator action:** Launch 1 Task agent.
 
 ### Stage 6: Delivery
 
