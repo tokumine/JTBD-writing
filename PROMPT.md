@@ -915,7 +915,7 @@ It's very important that Claude Code is **token efficient and maximally intellig
 
 Launch 6 parallel sub-agents with identical prompts. Each sub-agent:
 - Reads PROMPT.md for full context
-- Drafts a detailed implementation plan
+- Drafts a detailed implementation plan. uses methods which maximizes information density for an LLM reading the plan and implementing it
 - Writes to assigned file: `plans/draft_plan_N.md` (where N is 1-6)
 - Returns ONLY: `Done. Output: plans/draft_plan_N.md`
 
