@@ -1,6 +1,6 @@
 # PROMPT.md
 
-This is the master prompt for the Gemini Writing Evaluation Framework project.
+This is the master prompt for the Gemini Writing Evaluation Framework project. The Date is Jan 6, 2026. 
 
 ---
 
@@ -14,13 +14,11 @@ Use OpenRouter API and the latest O*NET database to produce this evaluation.
 
 ## DATA SOURCE: O*NET
 
-Use the latest O*NET database (US Department of Labor occupational data) to extract writing tasks across ALL jobs in the US economy.
+Use the latest (30.1) O*NET database (US Department of Labor occupational data) to extract writing tasks across ALL jobs in the US economy. the ONET DB is available in db/onet.db as a sqlite3 database that you can access. OPUS has pre-processed all the tasks where effective writing might be needed and written a guide in db/ONET_REFERENCE.md
 
 ### Granularity: Task-Level (Deepest)
 
 Use **individual task statements** from O*NET (e.g., "Draft correspondence for executive review"). This is the most granular level, providing ~20,000+ individual tasks across ~1,000 occupations.
-
-Generate or provide download scripts for O*NET data and any other eval context needed.
 
 ---
 
@@ -50,7 +48,7 @@ The big challenge is creating the right eval prompts for this task.
 
 ### Core Requirements
 
-The eval itself should be made up of **highly realistic writing tasks that are required across every single job in the US economy** (proxy: O*NET) and an **evenly distributed range of industries for diversity within a single job type** (e.g., CEO of fruit company, CEO of startup, CEO of charity).
+The eval itself should be made up of **highly realistic writing tasks that are required across every single job in the US economy** (proxy: O*NET) and an **evenly distributed range of industries for diversity within a single job type** (e.g., CEO of Coca Cola, CEO of 5 person Startup, CEO of charity).
 
 ### Diversity Requirements (CRITICAL)
 
@@ -76,7 +74,7 @@ Use official **NAICS industry codes** for systematic industry coverage within ea
 
 ### Company Grounding: Real Companies (CRITICAL FOR REALISM)
 
-**Use real, named companies instead of generic descriptions.** This grounds prompts in reality and enables more authentic evaluation.
+**Try to use real, named companies instead of generic descriptions.** This grounds prompts in reality and enables more authentic evaluation. For smaller companies specify size so it's clearer what stage and level of bureaucracy and maturity they are at.
 
 Instead of:
 > "CEO of a fruit company"
@@ -85,7 +83,7 @@ Use:
 > "CEO of Dole Food Company" or "CEO of Chiquita Brands"
 
 **Implementation:**
-- Use a real company database (SEC filings, Crunchbase, or business registries linked to NAICS codes)
+- Use a real company names using your built in knowledge
 - Sample across company sizes: Fortune 500, mid-market, small businesses, startups
 - Include both well-known and lesser-known companies for diversity
 - Store company metadata: size, age, public/private, HQ location
@@ -93,7 +91,6 @@ Use:
 **Bias considerations:**
 - Models may have uneven training data about different companies
 - Document which companies were used so bias can be analyzed
-- Include companies founded after training cutoffs as a control
 
 ### Realistic Names for People
 
@@ -106,7 +103,7 @@ Use:
 > "Write to Sarah Chen, VP of Marketing"
 
 **Implementation:**
-- Use name databases with demographic diversity (age, ethnicity, gender)
+- Use names with demographic diversity (age, ethnicity, gender)
 - Match names to persona characteristics plausibly
 - Include realistic email addresses where appropriate (sarah.chen@acme.com)
 - Vary name formality (Dr. Williams vs Mike vs Michael T. Williams)
@@ -219,7 +216,7 @@ Include some **deliberately vague prompts** to test how models handle uncertaint
 
 The **communication medium** affects expected tone, length, and format. Rather than hardcoding channels:
 
-- Let O*NET task statements imply the medium naturally (e.g., "Draft email...", "Prepare memo...", "Write report...")
+- Let O*NET task statements imply the medium naturally (e.g., "Draft email...", "Prepare memo...", "Write report...", "Social post on Twitter/X")
 - Use Phase 3 LLM enrichment to infer/specify medium when the task is ambiguous
 - Track channel as metadata for analysis (enables filtering results by medium)
 - **Do NOT force tasks into predefined channel categories** - let realistic variety emerge
@@ -681,7 +678,7 @@ If a model refuses to respond, goes off-topic, or produces an error, it **automa
 
 ### Refusal Categorization
 
-Beyond auto-loss, **categorize WHY models refuse** for deeper analysis:
+Beyond auto-loss, **categorize WHY models refuse** for deeper analysis. eg:
 
 - **Safety refusal**: Model cites safety/policy concerns
 - **Capability limitation**: Model says it can't do the task
@@ -910,12 +907,14 @@ It's very important that Claude Code is **token efficient and maximally intellig
      [Edit tool: append next 4000 tokens]
      [Final message: "Done. Output: plans/file.md"]
      ```
+     
+8. **VERIFY URLS**: If the eval requires download of any information or files from the internet, discover and verify they exist using search and browse tools rather than guessing or remembering the URL from parametric knowledge. 
 
 ### Stage 1: Initial Parallel Drafting
 
-Launch 6 parallel sub-agents with identical prompts. Each sub-agent:
+Launch 6 parallel OPUS sub-agents with identical prompts. Each sub-agent:
 - Reads PROMPT.md for full context
-- Drafts a detailed implementation plan. uses methods which maximizes information density for an LLM reading the plan and implementing it
+- Creates a detailed implementation plan (use a general purpose agent configured in the same way as a plan agent)
 - Writes to assigned file: `plans/draft_plan_N.md` (where N is 1-6)
 - Returns ONLY: `Done. Output: plans/draft_plan_N.md`
 
@@ -923,7 +922,7 @@ Launch 6 parallel sub-agents with identical prompts. Each sub-agent:
 
 ### Stage 2: Parallel Critique & Rewrite
 
-Launch 6 parallel sub-agents. Each sub-agent:
+Launch 6 parallel OPUS sub-agents. Each sub-agent:
 - Reads PROMPT.md AND their assigned draft (`plans/draft_plan_N.md`)
 - Critiques for correctness, robustness, errors, missed details, poor decisions
 - Writes improved version to: `plans/critique_N.md`
@@ -933,7 +932,7 @@ Launch 6 parallel sub-agents. Each sub-agent:
 
 ### Stage 3: Master Plan Synthesis
 
-Launch 1 sub-agent:
+Launch 1 OPUS sub-agent:
 - Reads PROMPT.md AND all 6 critique files
 - Synthesizes a master plan considering agreements, disagreements, risks, open questions
 - Writes to: `plans/master_plan_draft.md`
@@ -943,7 +942,7 @@ Launch 1 sub-agent:
 
 ### Stage 4: Parallel Implementation Simulation
 
-Launch 6 parallel sub-agents with identical prompts. Each sub-agent:
+Launch 6 parallel OPUS sub-agents with identical prompts. Each sub-agent:
 - Reads PROMPT.md AND `plans/master_plan_draft.md`
 - Simulates implementing the entire plan in detail (dry run)
 - Documents what works, what doesn't, missing pieces, gotchas
@@ -954,7 +953,7 @@ Launch 6 parallel sub-agents with identical prompts. Each sub-agent:
 
 ### Stage 5: Final Master Plan Improvement
 
-Launch 1 sub-agent:
+Launch 1 OPUS sub-agent:
 - Reads PROMPT.md, `plans/master_plan_draft.md`, AND all 6 simulation files
 - Produces the final improved master plan
 - Writes to: `plans/master_plan_final.md`
