@@ -14,7 +14,7 @@ Use OpenRouter API and the latest O*NET database to produce this evaluation.
 
 ## DATA SOURCE: O*NET
 
-Use the latest (30.1) O*NET database (US Department of Labor occupational data) to extract writing tasks across ALL jobs in the US economy. the ONET DB is available in db/onet.db as a sqlite3 database that you can access. OPUS has pre-processed all the tasks where effective writing might be needed and written a guide in db/ONET_REFERENCE.md
+Use the latest (30.1) O*NET database (US Department of Labor occupational data) to extract writing tasks across ALL jobs in the US economy. the ONET DB is available in db/onet.db as a sqlite3 database that you can access. OPUS has pre-processed all the tasks where effective writing might be needed and written a guide in db/ONET_WRITING_REFERENCE.md
 
 ### Granularity: Task-Level (Deepest)
 
