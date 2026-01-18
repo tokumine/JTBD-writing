@@ -1,2407 +1,1607 @@
-# Gemini Writing Evaluation Framework - Improved Implementation Plan
+# Critique of Draft Plan 3: Gemini Writing Evaluation Framework
 
-## Critical Evaluation of Draft Plan 3
+## Overview
 
-This document provides a significantly improved implementation plan based on critical analysis of Draft Plan 3. The following issues were identified and addressed:
-
-### Issues Identified in Draft Plan 3
-
-1. **Incomplete NAICS Mapping Strategy**: The draft mentions needing external BLS data but provides no concrete implementation for obtaining or embedding this data. The system would fail at runtime without this critical mapping.
-
-2. **Missing OpenRouter Model Name Verification**: The draft uses model names like `google/gemini-3-pro` without verifying these are the actual OpenRouter model identifiers. Model names on OpenRouter often differ from marketing names.
-
-3. **Inadequate Dual-Persona Judging Implementation**: The draft shows judge personas but doesn't properly implement simultaneous dual-persona evaluation per the PROMPT.md requirement that each comparison should be judged by BOTH personas.
-
-4. **Missing Majority-of-Majorities Implementation Details**: While mentioned, the aggregation logic for majority-of-majorities (across 3 judges x 5 votes x 2 personas) is underspecified.
-
-5. **Company Database Too Small**: The draft shows only a few example companies. A production system needs hundreds of companies across all NAICS sectors and size categories.
-
-6. **Name Generator Lacks Email Domain Handling**: The draft shows email usernames but not how company-specific email domains are generated.
-
-7. **Weak Sensitive Topic Detection**: The failure handler mentions safety refusals but lacks proactive sensitive topic classification during prompt generation.
-
-8. **No Concurrent Request Limit Management**: The rate limiter handles tokens/requests per minute but doesn't manage maximum concurrent connections, which OpenRouter may limit.
-
-9. **Missing Prompt Validation**: No validation that generated prompts meet the diversity and quality requirements before evaluation begins.
-
-10. **Incomplete TUI Error States**: The TUI shows happy-path progress but lacks proper error state handling and recovery UI.
-
-11. **SQLite Concurrency Issues**: The draft uses SQLite but doesn't address write contention with async workers.
-
-12. **Missing Cost Accumulator with Hard Stop**: No mechanism to halt evaluation if costs exceed a user-defined budget.
-
-13. **Weak Temporal Context Generation**: The draft mentions temporal context but lacks systematic date/deadline generation that's consistent with the evaluation date.
-
-14. **No Model Version Tracking**: The draft doesn't capture exact model versions from API responses for reproducibility.
-
-15. **Missing Warm-up/Calibration Phase**: No mechanism to verify API connectivity and calibrate token estimates before committing to a full run.
+Draft Plan 3 presents a comprehensive and well-structured implementation plan for the Gemini Writing Evaluation Framework. The plan demonstrates strong technical understanding and covers most major components specified in PROMPT.md. However, there are several areas requiring correction, improvement, and additional specification to ensure full compliance with requirements.
 
 ---
 
-## 1. System Architecture (Improved)
+## Part 1: Detailed Critique
 
-### 1.1 High-Level Architecture
+### 1.1 Strengths of the Draft Plan
 
-```
-                                    +---------------------------+
-                                    |     User Interface        |
-                                    |  (Rich TUI + CLI Args)    |
-                                    +-------------+-------------+
-                                                  |
-                                    +-------------v-------------+
-                                    |    Orchestration Engine   |
-                                    |  - Config Management      |
-                                    |  - Preset Selection       |
-                                    |  - Cost Estimation        |
-                                    |  - Budget Enforcement     |  <-- NEW
-                                    |  - Warm-up Phase          |  <-- NEW
-                                    +-------------+-------------+
-                                                  |
-                    +-----------------------------+-----------------------------+
-                    |                             |                             |
-        +-----------v-----------+   +------------v------------+   +------------v------------+
-        |   Prompt Generation   |   |   Response Generation   |   |     Judging System      |
-        |   Pipeline            |   |   Engine                |   |                         |
-        |  - O*NET Extraction   |   |  - OpenRouter Client    |   |  - Multi-Judge Ensemble |
-        |  - Context Enrichment |   |  - Connection Pool Mgmt |   |  - Dual-Persona Per     |
-        |  - LLM Enhancement    |   |  - Retry with Circuit   |   |    Comparison           |
-        |  - Prompt Validation  |   |    Breaker              |   |  - Majority of          |
-        +-----------+-----------+   +------------+------------+   |    Majorities           |
-                    |                             |               +------------+------------+
-                    +-----------------------------+-----------------------------+
-                                                  |
-                                    +-------------v-------------+
-                                    |    Data Storage Layer     |
-                                    |  - SQLite with WAL Mode   |  <-- IMPROVED
-                                    |  - Write Coalescing       |  <-- NEW
-                                    |  - JSON Checkpoints       |
-                                    +-------------+-------------+
-                                                  |
-                                    +-------------v-------------+
-                                    |   Analysis & Reporting    |
-                                    |  - Win Rate Calculation   |
-                                    |  - Statistical Tests      |
-                                    |  - PDF Report Generation  |
-                                    +---------------------------+
-```
+1. **Excellent Architecture Design**: The layered architecture (UI, Orchestration, Execution, Persistence, Analysis) is clean and appropriate for the complexity of the system.
 
-### 1.2 Improved Module Structure
+2. **Strong Data Models**: The Pydantic schemas for WritingPrompt, ModelResponse, JudgmentVote, and ComparisonResult are comprehensive and include most required metadata fields.
 
-```
-gemini_writing_eval/
-├── __init__.py
-├── cli.py                          # Click-based CLI interface
-├── config/
-│   ├── __init__.py
-│   ├── presets.py                  # 10 preset configurations
-│   ├── models.py                   # Model definitions with VERIFIED OpenRouter IDs
-│   ├── settings.py                 # Pydantic settings management
-│   └── budget.py                   # NEW: Budget limits and cost tracking
-├── data/
-│   ├── __init__.py
-│   ├── onet_extractor.py           # O*NET database access
-│   ├── naics_mapper.py             # Industry code mapping with EMBEDDED BLS data
-│   ├── company_database.py         # NEW: Comprehensive company database
-│   ├── name_generator.py           # Realistic name generation with email domains
-│   └── sensitive_topics.py         # NEW: Sensitive topic classification
-├── prompts/
-│   ├── __init__.py
-│   ├── generator.py                # Main prompt generation orchestrator
-│   ├── enrichment.py               # LLM enrichment phase
-│   ├── personas.py                 # Writer/recipient persona logic
-│   ├── temporal.py                 # NEW: Temporal context generation
-│   ├── validation.py               # NEW: Prompt validation before evaluation
-│   └── schemas.py                  # Pydantic schemas for prompts
-├── api/
-│   ├── __init__.py
-│   ├── openrouter.py               # OpenRouter API client
-│   ├── connection_pool.py          # NEW: Connection pool management
-│   ├── rate_limiter.py             # Token bucket rate limiting
-│   ├── circuit_breaker.py          # NEW: Circuit breaker for failure handling
-│   └── retry.py                    # Exponential backoff retry logic
-├── evaluation/
-│   ├── __init__.py
-│   ├── runner.py                   # Main evaluation loop
-│   ├── warmup.py                   # NEW: Warm-up/calibration phase
-│   ├── judging.py                  # Multi-judge ensemble logic
-│   ├── dual_persona.py             # NEW: Dual persona handling
-│   ├── rubric.py                   # Evaluation criteria
-│   └── aggregation.py              # Majority-of-majorities aggregation
-├── storage/
-│   ├── __init__.py
-│   ├── checkpoint.py               # Checkpoint management
-│   ├── database.py                 # SQLite operations with WAL
-│   ├── write_coalescer.py          # NEW: Batch writes for performance
-│   └── filesystem.py               # Directory structure management
-├── analysis/
-│   ├── __init__.py
-│   ├── statistics.py               # Win rates, confidence intervals
-│   ├── bias_detection.py           # Systematic bias analysis
-│   └── weakness_finder.py          # Gemini weakness identification
-├── reporting/
-│   ├── __init__.py
-│   ├── pdf_generator.py            # PDF report with plotly
-│   ├── charts.py                   # Visualization generation
-│   └── templates/                  # Report templates
-├── tui/
-│   ├── __init__.py
-│   ├── app.py                      # Main Textual application
-│   ├── screens/
-│   │   ├── progress.py             # Live progress dashboard
-│   │   ├── viewer.py               # Results viewer
-│   │   ├── config.py               # Configuration screen
-│   │   └── error_recovery.py       # NEW: Error state handling
-│   └── widgets/
-└── utils/
-    ├── __init__.py
-    ├── logging.py                  # Structured logging
-    ├── costs.py                    # Cost estimation utilities
-    └── model_versions.py           # NEW: Model version tracking
-```
+3. **Robust API Integration**: The OpenRouter client architecture with RateLimiter, RetryHandler, and CircuitBreaker demonstrates solid understanding of production API integration requirements.
 
-### 1.3 Verified Dependencies
+4. **Good TUI Implementation**: The Textual-based progress dashboard design matches the detailed requirements from PROMPT.md well.
 
-```toml
-[tool.poetry.dependencies]
-python = "^3.11"
-httpx = "^0.27"                     # Async HTTP client
-pydantic = "^2.5"                   # Data validation
-pydantic-settings = "^2.1"          # Configuration management
-sqlalchemy = "^2.0"                 # Database ORM
-aiosqlite = "^0.19"                 # Async SQLite driver (NEW)
-rich = "^13.7"                      # Terminal formatting
-textual = "^0.52"                   # TUI framework
-plotly = "^5.18"                    # Visualizations
-kaleido = "0.2.1"                   # Plotly static export
-scipy = "^1.12"                     # Statistical tests
-pandas = "^2.2"                     # Data analysis
-click = "^8.1"                      # CLI framework
-tenacity = "^8.2"                   # Retry logic
-anyio = "^4.2"                      # Async utilities
-structlog = "^24.1"                 # Structured logging
-weasyprint = "^61"                  # PDF generation
-jinja2 = "^3.1"                     # Report templates
-numpy = "^1.26"                     # Numerical operations
-scikit-learn = "^1.4"               # For Cohen's Kappa calculation
-```
+5. **Comprehensive Testing Strategy**: The testing approach covers unit and integration tests with appropriate fixtures.
 
----
+### 1.2 Critical Issues and Missing Components
 
-## 2. OpenRouter Model Configuration (CRITICAL FIX)
+#### 1.2.1 Prompt Generation Issues
 
-### 2.1 Verified Model Identifiers
+**Problem 1: Writing Categories are Hardcoded**
 
-**IMPORTANT**: Model identifiers must be verified against the actual OpenRouter API. The following are based on OpenRouter's typical naming conventions but MUST be verified before implementation:
+PROMPT.md explicitly states: "IMPORTANT: Avoid hardcoding specific categories and types of effective writing where possible. Let the O*NET data drive this diversity programmatically."
 
+The draft plan hardcodes WRITING_CATEGORIES in ONetLoader:
 ```python
-# config/models.py
-
-from dataclasses import dataclass
-from enum import Enum
-
-class ModelTier(Enum):
-    PRO = "pro"
-    FLASH = "flash"
-
-@dataclass
-class ModelConfig:
-    """Configuration for a model with verified OpenRouter ID."""
-    display_name: str
-    openrouter_id: str  # MUST match OpenRouter exactly
-    tier: ModelTier
-    # Pricing per 1M tokens (to be verified from OpenRouter API)
-    input_price_per_million: float
-    output_price_per_million: float
-    # Rate limits (requests per minute, tokens per minute)
-    rpm_limit: int
-    tpm_limit: int
-    # Whether this model can be used as a judge
-    can_judge: bool = True
-
-# These IDs need verification against OpenRouter's actual catalog
-# Run: curl https://openrouter.ai/api/v1/models -H "Authorization: Bearer $API_KEY"
-MODELS = {
-    # Pro tier - Gemini
-    "gemini-3-pro": ModelConfig(
-        display_name="Gemini 3.0 Pro",
-        openrouter_id="google/gemini-2.0-flash-thinking-exp",  # VERIFY THIS
-        tier=ModelTier.PRO,
-        input_price_per_million=2.50,
-        output_price_per_million=10.00,
-        rpm_limit=60,
-        tpm_limit=100000,
-    ),
-    # Pro tier - Competitors
-    "gpt-5.2-thinking": ModelConfig(
-        display_name="GPT-5.2 Thinking",
-        openrouter_id="openai/o1-preview",  # VERIFY - may need update for 5.2
-        tier=ModelTier.PRO,
-        input_price_per_million=15.00,
-        output_price_per_million=60.00,
-        rpm_limit=20,
-        tpm_limit=150000,
-    ),
-    "claude-opus-4.5": ModelConfig(
-        display_name="Claude Opus 4.5",
-        openrouter_id="anthropic/claude-3.5-sonnet",  # VERIFY - update for 4.5
-        tier=ModelTier.PRO,
-        input_price_per_million=15.00,
-        output_price_per_million=75.00,
-        rpm_limit=50,
-        tpm_limit=100000,
-    ),
-    "grok-4.1-thinking": ModelConfig(
-        display_name="Grok 4.1 Thinking",
-        openrouter_id="x-ai/grok-2",  # VERIFY
-        tier=ModelTier.PRO,
-        input_price_per_million=5.00,
-        output_price_per_million=15.00,
-        rpm_limit=60,
-        tpm_limit=100000,
-    ),
-    "kimi-k2-thinking": ModelConfig(
-        display_name="Kimi K2 Thinking",
-        openrouter_id="moonshot/moonshot-v1-8k",  # VERIFY
-        tier=ModelTier.PRO,
-        input_price_per_million=2.00,
-        output_price_per_million=8.00,
-        rpm_limit=60,
-        tpm_limit=100000,
-    ),
-    # Flash tier
-    "gemini-3-flash": ModelConfig(
-        display_name="Gemini 3.0 Flash",
-        openrouter_id="google/gemini-2.0-flash-exp",  # VERIFY
-        tier=ModelTier.FLASH,
-        input_price_per_million=0.10,
-        output_price_per_million=0.40,
-        rpm_limit=100,
-        tpm_limit=200000,
-    ),
-    "gpt-4.1": ModelConfig(
-        display_name="GPT-4.1",
-        openrouter_id="openai/gpt-4-turbo",  # VERIFY
-        tier=ModelTier.FLASH,
-        input_price_per_million=10.00,
-        output_price_per_million=30.00,
-        rpm_limit=60,
-        tpm_limit=150000,
-    ),
-    "claude-sonnet": ModelConfig(
-        display_name="Claude Sonnet",
-        openrouter_id="anthropic/claude-3.5-sonnet",  # VERIFY
-        tier=ModelTier.FLASH,
-        input_price_per_million=3.00,
-        output_price_per_million=15.00,
-        rpm_limit=60,
-        tpm_limit=100000,
-    ),
+WRITING_CATEGORIES = {
+    "explicit_writing": [...],
+    "correspondence": [...],
+    ...
 }
-
-async def verify_model_availability(api_client, model_ids: list[str]) -> dict[str, bool]:
-    """Verify which models are available on OpenRouter."""
-    response = await api_client.get("/models")
-    available = {m["id"] for m in response["data"]}
-    return {mid: mid in available for mid in model_ids}
 ```
 
-### 2.2 Model Verification at Startup
+**Impact**: This violates a critical directive and may miss writing tasks that don't fit predefined patterns.
+
+**Problem 2: Missing Phase 1 - Offline LLM Generation**
+
+The three-phase prompt generation approach is mentioned but Phase 1 (Offline LLM Generation for persona/context templates) is not actually implemented. The plan jumps from O*NET extraction directly to algorithmic combination.
+
+**Problem 3: Communication Channel Handling**
+
+PROMPT.md states: "Do NOT force tasks into predefined channel categories - let realistic variety emerge." However, the plan defines a CommunicationChannel enum with fixed options, which contradicts this requirement.
+
+#### 1.2.2 Evaluation Methodology Issues
+
+**Problem 4: Incomplete Judge Persona Implementation**
+
+The dual judge persona system (Writing Expert vs Simulated Recipient) is described, but the recipient persona generation doesn't fully capture the depth required. PROMPT.md specifies the recipient persona should judge from the perspective of "whoever the writing is intended for in that specific task."
+
+The `build_recipient_persona` method is too generic and doesn't adequately adapt to the specific context (e.g., different for a CEO recipient vs. junior employee recipient).
+
+**Problem 5: Missing Instruction-Following Verification**
+
+PROMPT.md requires: "Include some prompts with explicit constraints to test instruction-following" and "Track compliance separately."
+
+The plan includes InstructionConstraint in the schema but doesn't implement the verification logic to actually check if constraints were followed.
+
+**Problem 6: Ambiguity Handling Tracking Incomplete**
+
+PROMPT.md specifies tracking specific behaviors for ambiguous prompts:
+- Does it make reasonable assumptions?
+- Does it ask for clarification?
+- Does it hedge appropriately?
+- Does it hallucinate specific details?
+
+The plan marks prompts as deliberately_ambiguous but doesn't implement tracking for these specific behavioral patterns.
+
+#### 1.2.3 Configuration and Cost Estimation Issues
+
+**Problem 7: Flash-Tier Model Comparisons Missing**
+
+The plan focuses heavily on Pro-tier comparisons but underspecifies the Flash-tier evaluation:
+- Gemini 3.0 Flash vs GPT-4.1
+- Gemini 3.0 Flash vs Claude Sonnet
+- "Other flash-tier models in class"
+
+The preset configurations only show Pro-tier model pairs.
+
+**Problem 8: Time Estimates Not Calculated**
+
+The cost estimation is implemented, but time estimation (which PROMPT.md requires in the estimate display) is mentioned but not actually calculated based on rate limits and parallelization.
+
+#### 1.2.4 Analysis and Reporting Issues
+
+**Problem 9: Win Rate Breakdown Missing Dimensions**
+
+PROMPT.md requires win rates broken down by multiple dimensions beyond what's implemented:
+- By age/generation of writer persona
+- By communication channel
+- By audience size
+- By emotional context
+- By message position (initial/reply/follow-up)
+
+**Problem 10: Effect Size Calculation Missing**
+
+PROMPT.md requires "effect sizes" in statistical analysis, but the StatisticalAnalyzer only computes win rates, confidence intervals, and kappa. Effect size measures (like Cohen's d or odds ratios) are not implemented.
+
+**Problem 11: Response Format Bias Detection Incomplete**
+
+The bias detection for "Format bias: Does one model overuse certain structures?" is mentioned but not fully implemented with statistical tests.
+
+### 1.3 Technical Errors and Bugs
+
+**Bug 1: Incorrect Vote Aggregation for Personas**
+
+The vote aggregation groups by judge_model but doesn't account for the dual personas correctly. With 3 judges x 2 personas x 5 votes = 30 votes per comparison, the aggregation logic needs to handle persona-level aggregation before judge-level.
+
+**Bug 2: Position Bias Analysis Missing Gemini Context**
+
+The position bias analysis looks at A vs B preference but should specifically track whether Gemini being in position A vs B affects outcomes, not just raw A/B preference.
+
+**Bug 3: Database Schema Missing Key Fields**
+
+The prompts table is missing fields for:
+- `audience_size`
+- `emotional_context`
+- `message_position`
+- `temporal_context`
+- `language` and `language_variant`
+
+These are in the Pydantic model but not the SQL schema.
+
+**Bug 4: Checkpoint Query Logic Issue**
+
+The `get_incomplete_prompts` method for generation phase checks for existence of both responses, but doesn't handle the case where one model responded and the other didn't (partial completion).
+
+### 1.4 Missing Components from PROMPT.md
+
+1. **Regional English Variants Analysis**: No analysis implementation for how models adapt to en-GB, en-AU, or non-native recipient contexts.
+
+2. **Refusal Categorization Tracking**: The RefusalCategory system isn't fully integrated into analysis and reporting.
+
+3. **Tone Matching Evaluation**: When tone_example is provided, there's no mechanism to evaluate whether the model matched the established tone.
+
+4. **Multiple Recipients (CC) Analysis**: No specific analysis for how models handle multi-audience communication.
+
+5. **Cross-Run Comparison Command**: The `compare` CLI command is stubbed but not implemented.
+
+6. **Auto-Generated README**: Each run directory should have an auto-generated README.md (mentioned in PROMPT.md results structure) but not implemented.
+
+7. **CSV Export Functionality**: Mentioned in PROMPT.md but not fully implemented in the results manager.
+
+---
+
+## Part 2: Improved Implementation Plan
+
+### 2.1 Revised Prompt Generation Pipeline
+
+Replace the hardcoded writing categories with a data-driven approach:
 
 ```python
-# evaluation/warmup.py
+class ONetTaskExtractor:
+    """Extract writing-relevant tasks from O*NET using the preprocessed reference"""
 
-class WarmupPhase:
-    """Pre-evaluation verification and calibration."""
+    def __init__(self, db_path: Path, reference_path: Path):
+        self.db_path = db_path
+        self.reference = self._load_reference(reference_path)
 
-    async def run(self, config: EvalConfig, api_client: APIClient) -> WarmupResult:
+    def _load_reference(self, path: Path) -> WritingReference:
+        """Load the ONET_WRITING_REFERENCE.md preprocessed by Opus"""
+        # Parse the reference document for task mappings
+        pass
+
+    async def extract_all_writing_tasks(self) -> list[ONetWritingTask]:
+        """Extract tasks based on the Opus-preprocessed reference, not hardcoded categories"""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Use reference-guided extraction, not pattern matching
+            tasks = []
+            for task_id in self.reference.writing_task_ids:
+                task = await self._fetch_task_with_context(db, task_id)
+                tasks.append(task)
+            return tasks
+
+    async def _fetch_task_with_context(
+        self, db: aiosqlite.Connection, task_id: str
+    ) -> ONetWritingTask:
+        """Fetch task with full occupation context"""
+        query = """
+            SELECT
+                t.task_id,
+                t.task,
+                t.task_type,
+                o.onetsoc_code,
+                o.title as occupation_title,
+                o.description as occupation_description,
+                jz.job_zone
+            FROM task_statements t
+            JOIN occupation_data o ON t.onetsoc_code = o.onetsoc_code
+            JOIN job_zones jz ON o.onetsoc_code = jz.onetsoc_code
+            WHERE t.task_id = ?
         """
-        Run all pre-flight checks before evaluation begins.
-
-        1. Verify API connectivity
-        2. Verify all models are available
-        3. Run calibration prompts to estimate token usage
-        4. Verify sufficient API credits
-        5. Test judge models
-        """
-        results = WarmupResult()
-
-        # 1. Verify API connectivity
-        try:
-            await api_client.health_check()
-            results.api_connected = True
-        except Exception as e:
-            results.api_connected = False
-            results.errors.append(f"API connection failed: {e}")
-            return results
-
-        # 2. Verify model availability
-        all_model_ids = self._collect_all_model_ids(config)
-        availability = await verify_model_availability(api_client, all_model_ids)
-
-        unavailable = [mid for mid, avail in availability.items() if not avail]
-        if unavailable:
-            results.errors.append(f"Models not available: {unavailable}")
-            return results
-        results.models_verified = True
-
-        # 3. Run calibration prompts
-        calibration = await self._run_calibration(config, api_client)
-        results.token_estimates = calibration
-
-        # 4. Estimate costs and check budget
-        estimated_cost = self._estimate_total_cost(config, calibration)
-        if config.budget_limit and estimated_cost > config.budget_limit:
-            results.warnings.append(
-                f"Estimated cost ${estimated_cost:.2f} exceeds budget ${config.budget_limit:.2f}"
-            )
-        results.estimated_cost = estimated_cost
-
-        # 5. Test judge models with sample comparison
-        judge_test = await self._test_judges(config, api_client)
-        results.judges_verified = judge_test.success
-
-        return results
-
-    async def _run_calibration(self, config, api_client) -> TokenEstimates:
-        """Run sample prompts to calibrate token estimates."""
-        # Generate 3 sample prompts of varying complexity
-        # Run through 1 model to measure actual token usage
-        # Return calibrated estimates
+        # Return enriched task object
         pass
 ```
 
----
-
-## 3. NAICS Industry Mapping (CRITICAL FIX)
-
-### 3.1 Embedded BLS Occupation-Industry Matrix
-
-The draft plan correctly identified that O*NET lacks NAICS codes but failed to provide a concrete solution. Here's the implementation:
+### 2.2 Full Three-Phase Generation Implementation
 
 ```python
-# data/naics_mapper.py
+class PromptGenerationPipeline:
+    """Complete three-phase prompt generation as specified in PROMPT.md"""
 
-"""
-NAICS industry mapping using embedded BLS Occupation-Industry Matrix data.
+    def __init__(
+        self,
+        onet_extractor: ONetTaskExtractor,
+        api_client: OpenRouterClient,
+        config: PromptGenerationConfig
+    ):
+        self.extractor = onet_extractor
+        self.api_client = api_client
+        self.config = config
 
-The BLS publishes occupation-industry employment data annually. This module
-embeds a compressed version for the most common occupation-industry combinations.
-"""
+    async def generate_prompts(self, n_prompts: int, seed: int) -> list[WritingPrompt]:
+        """Execute all three phases of prompt generation"""
 
-import json
-from dataclasses import dataclass
-from pathlib import Path
+        # Phase 1: Offline LLM Generation (pre-generate templates)
+        templates = await self._phase1_generate_templates(seed)
 
-@dataclass
-class IndustryMapping:
-    naics_code: str
-    naics_name: str
-    employment_share: float  # % of occupation employed in this industry
+        # Phase 2: Algorithmic Combinations
+        base_prompts = await self._phase2_algorithmic_combination(
+            n_prompts, templates, seed
+        )
 
-# NAICS 2-digit sectors
-NAICS_SECTORS = {
-    "11": "Agriculture, Forestry, Fishing and Hunting",
-    "21": "Mining, Quarrying, and Oil and Gas Extraction",
-    "22": "Utilities",
-    "23": "Construction",
-    "31": "Manufacturing",  # 31-33 collapsed
-    "42": "Wholesale Trade",
-    "44": "Retail Trade",  # 44-45 collapsed
-    "48": "Transportation and Warehousing",  # 48-49 collapsed
-    "51": "Information",
-    "52": "Finance and Insurance",
-    "53": "Real Estate and Rental and Leasing",
-    "54": "Professional, Scientific, and Technical Services",
-    "55": "Management of Companies and Enterprises",
-    "56": "Administrative and Support Services",
-    "61": "Educational Services",
-    "62": "Health Care and Social Assistance",
-    "71": "Arts, Entertainment, and Recreation",
-    "72": "Accommodation and Food Services",
-    "81": "Other Services (except Public Administration)",
-    "92": "Public Administration",
-}
+        # Phase 3: LLM Enrichment for complex prompts
+        final_prompts = await self._phase3_llm_enrichment(base_prompts)
 
-class NAICSMapper:
-    """
-    Map SOC occupation codes to NAICS industry codes.
+        return final_prompts
 
-    Uses embedded BLS Occupation-Industry Matrix data. The matrix shows
-    employment distribution of each occupation across industries.
-    """
+    async def _phase1_generate_templates(self, seed: int) -> PromptTemplates:
+        """Phase 1: Use evaluated models to generate diverse templates"""
 
-    def __init__(self):
-        # Load embedded occupation-industry matrix
-        # This would be a JSON file bundled with the package
-        matrix_path = Path(__file__).parent / "bls_occupation_industry_matrix.json"
-        if matrix_path.exists():
-            with open(matrix_path) as f:
-                self._matrix = json.load(f)
-        else:
-            # Fallback to broad SOC-major-group to NAICS mapping
-            self._matrix = self._generate_fallback_matrix()
-
-    def _generate_fallback_matrix(self) -> dict:
-        """
-        Generate a fallback mapping based on SOC major groups.
-
-        This is a simplified mapping when full BLS data isn't available.
-        Each SOC major group maps to its most common industries.
-        """
-        return {
-            # Management Occupations (11-*)
-            "11": [
-                IndustryMapping("54", "Professional Services", 0.25),
-                IndustryMapping("52", "Finance and Insurance", 0.15),
-                IndustryMapping("62", "Health Care", 0.12),
-                IndustryMapping("31", "Manufacturing", 0.10),
-                IndustryMapping("44", "Retail Trade", 0.08),
-                IndustryMapping("23", "Construction", 0.08),
-                IndustryMapping("51", "Information", 0.07),
-                IndustryMapping("72", "Accommodation and Food Services", 0.05),
-                IndustryMapping("56", "Administrative Services", 0.05),
-                IndustryMapping("92", "Public Administration", 0.05),
-            ],
-            # Business and Financial Operations (13-*)
-            "13": [
-                IndustryMapping("54", "Professional Services", 0.30),
-                IndustryMapping("52", "Finance and Insurance", 0.25),
-                IndustryMapping("55", "Management of Companies", 0.10),
-                IndustryMapping("92", "Public Administration", 0.08),
-                IndustryMapping("62", "Health Care", 0.07),
-                IndustryMapping("31", "Manufacturing", 0.07),
-                IndustryMapping("51", "Information", 0.06),
-                IndustryMapping("56", "Administrative Services", 0.07),
-            ],
-            # Computer and Mathematical (15-*)
-            "15": [
-                IndustryMapping("54", "Professional Services", 0.35),
-                IndustryMapping("51", "Information", 0.25),
-                IndustryMapping("52", "Finance and Insurance", 0.12),
-                IndustryMapping("31", "Manufacturing", 0.08),
-                IndustryMapping("55", "Management of Companies", 0.07),
-                IndustryMapping("92", "Public Administration", 0.05),
-                IndustryMapping("62", "Health Care", 0.04),
-                IndustryMapping("61", "Educational Services", 0.04),
-            ],
-            # ... Continue for all 22 SOC major groups
-        }
-
-    def get_industries_for_occupation(self, soc_code: str) -> list[IndustryMapping]:
-        """
-        Get list of industries where this occupation commonly works.
-
-        Returns industries sorted by employment share (descending).
-        """
-        # Try exact SOC code first
-        if soc_code in self._matrix:
-            return self._matrix[soc_code]
-
-        # Fall back to SOC major group (first 2 digits)
-        soc_major = soc_code[:2]
-        if soc_major in self._matrix:
-            return self._matrix[soc_major]
-
-        # Default: all industries with equal weight
-        return [
-            IndustryMapping(code, name, 1.0 / len(NAICS_SECTORS))
-            for code, name in NAICS_SECTORS.items()
+        # Use the same models being evaluated (as per PROMPT.md)
+        generation_models = [
+            "google/gemini-3-pro",
+            "google/gemini-3-flash",
+            "openai/gpt-5.2-thinking",
+            "anthropic/claude-opus-4.5"
         ]
 
-    def sample_industry(self, soc_code: str, rng) -> IndustryMapping:
-        """
-        Sample an industry for this occupation weighted by employment share.
+        templates = PromptTemplates()
 
-        Uses the provided random number generator for reproducibility.
-        """
-        industries = self.get_industries_for_occupation(soc_code)
-        weights = [ind.employment_share for ind in industries]
+        # Generate persona variations
+        for model in generation_models:
+            persona_batch = await self._generate_personas_with_model(model, seed)
+            templates.personas.extend(persona_batch)
 
-        # Normalize weights
-        total = sum(weights)
-        weights = [w / total for w in weights]
+        # Generate context variations
+        for model in generation_models:
+            context_batch = await self._generate_contexts_with_model(model, seed)
+            templates.contexts.extend(context_batch)
 
-        # Sample
-        idx = rng.choice(len(industries), p=weights)
-        return industries[idx]
+        # Track which model generated which templates (for bias analysis)
+        templates.generation_log = self._log_generation_sources()
 
-    def sample_diverse_industries(self,
-                                   soc_code: str,
-                                   num_samples: int,
-                                   rng) -> list[IndustryMapping]:
-        """
-        Sample multiple diverse industries, ensuring no duplicates.
-        """
-        industries = self.get_industries_for_occupation(soc_code)
+        return templates
 
-        if num_samples >= len(industries):
-            return industries.copy()
+    async def _phase2_algorithmic_combination(
+        self,
+        n_prompts: int,
+        templates: PromptTemplates,
+        seed: int
+    ) -> list[WritingPrompt]:
+        """Phase 2: Deterministic algorithmic combination"""
 
-        # Sample without replacement, weighted
-        weights = [ind.employment_share for ind in industries]
-        total = sum(weights)
-        weights = [w / total for w in weights]
+        rng = random.Random(seed)
+        tasks = await self.extractor.extract_all_writing_tasks()
 
-        indices = rng.choice(
-            len(industries),
-            size=num_samples,
-            replace=False,
-            p=weights
-        )
-        return [industries[i] for i in indices]
-```
-
----
-
-## 4. Comprehensive Company Database (CRITICAL FIX)
-
-### 4.1 Company Database Structure
-
-The draft plan showed only a few example companies. A production system needs comprehensive coverage:
-
-```python
-# data/company_database.py
-
-"""
-Comprehensive database of real companies for realistic prompt grounding.
-
-Organized by NAICS sector and company size. Each entry includes metadata
-for realistic scenario generation.
-"""
-
-from dataclasses import dataclass
-from enum import Enum
-import json
-from pathlib import Path
-
-class CompanySize(Enum):
-    FORTUNE_500 = "fortune_500"
-    LARGE = "large"              # 1000-10000 employees
-    MIDMARKET = "midmarket"      # 100-1000 employees
-    SMALL_BUSINESS = "small"     # 10-100 employees
-    STARTUP = "startup"          # <10 employees
-
-@dataclass
-class Company:
-    name: str
-    naics_code: str
-    size: CompanySize
-    employee_range: str
-    founded_year: int | None
-    is_public: bool
-    hq_city: str
-    hq_country: str
-    industry_description: str
-    # For generating realistic email domains
-    email_domain: str | None
-
-class CompanyDatabase:
-    """
-    Database of real companies organized by industry and size.
-
-    Provides approximately 500+ companies across:
-    - 20 NAICS sectors
-    - 5 size categories
-    - Geographic diversity (US-focused with international)
-    """
-
-    def __init__(self):
-        self._companies = self._load_companies()
-
-    def _load_companies(self) -> dict[str, dict[str, list[Company]]]:
-        """
-        Load companies from embedded data.
-
-        Structure: {naics_code: {size: [companies]}}
-        """
-        # This would be loaded from a JSON file in production
-        # Here we show the structure with representative examples
-
-        return {
-            # Professional, Scientific, and Technical Services (54)
-            "54": {
-                CompanySize.FORTUNE_500: [
-                    Company("Deloitte", "54", CompanySize.FORTUNE_500,
-                            "300,000-400,000", 1845, False, "New York", "USA",
-                            "Professional services and consulting", "deloitte.com"),
-                    Company("Accenture", "54", CompanySize.FORTUNE_500,
-                            "700,000+", 1989, True, "Dublin", "Ireland",
-                            "Consulting and professional services", "accenture.com"),
-                    Company("McKinsey & Company", "54", CompanySize.FORTUNE_500,
-                            "30,000-45,000", 1926, False, "New York", "USA",
-                            "Management consulting", "mckinsey.com"),
-                    Company("Boston Consulting Group", "54", CompanySize.FORTUNE_500,
-                            "25,000-30,000", 1963, False, "Boston", "USA",
-                            "Management consulting", "bcg.com"),
-                    Company("KPMG", "54", CompanySize.FORTUNE_500,
-                            "200,000-250,000", 1987, False, "Amstelveen", "Netherlands",
-                            "Audit, tax, and advisory services", "kpmg.com"),
-                    Company("PwC", "54", CompanySize.FORTUNE_500,
-                            "280,000-330,000", 1998, False, "London", "UK",
-                            "Professional services", "pwc.com"),
-                    Company("Ernst & Young", "54", CompanySize.FORTUNE_500,
-                            "300,000-365,000", 1989, False, "London", "UK",
-                            "Professional services", "ey.com"),
-                ],
-                CompanySize.LARGE: [
-                    Company("Booz Allen Hamilton", "54", CompanySize.LARGE,
-                            "25,000-30,000", 1914, True, "McLean", "USA",
-                            "Government consulting", "bah.com"),
-                    Company("Bain & Company", "54", CompanySize.LARGE,
-                            "12,000-15,000", 1973, False, "Boston", "USA",
-                            "Management consulting", "bain.com"),
-                    Company("Oliver Wyman", "54", CompanySize.LARGE,
-                            "5,000-7,000", 1984, False, "New York", "USA",
-                            "Management consulting", "oliverwyman.com"),
-                ],
-                CompanySize.MIDMARKET: [
-                    Company("West Monroe Partners", "54", CompanySize.MIDMARKET,
-                            "2,000-3,000", 2002, False, "Chicago", "USA",
-                            "Business and technology consulting", "westmonroe.com"),
-                    Company("FTI Consulting", "54", CompanySize.MIDMARKET,
-                            "6,000-8,000", 1982, True, "Washington DC", "USA",
-                            "Business advisory", "fticonsulting.com"),
-                    Company("ZS Associates", "54", CompanySize.MIDMARKET,
-                            "10,000-12,000", 1983, False, "Evanston", "USA",
-                            "Sales and marketing consulting", "zs.com"),
-                ],
-                CompanySize.SMALL_BUSINESS: [
-                    Company("Apex Business Solutions", "54", CompanySize.SMALL_BUSINESS,
-                            "25-50", 2015, False, "Austin", "USA",
-                            "Regional business consulting", None),
-                    Company("Strategic Growth Partners", "54", CompanySize.SMALL_BUSINESS,
-                            "15-25", 2018, False, "Denver", "USA",
-                            "Growth strategy consulting", None),
-                ],
-                CompanySize.STARTUP: [
-                    Company("Innova Strategy Group", "54", CompanySize.STARTUP,
-                            "3-8", 2022, False, "San Francisco", "USA",
-                            "Early-stage startup consulting", None),
-                ],
-            },
-
-            # Finance and Insurance (52)
-            "52": {
-                CompanySize.FORTUNE_500: [
-                    Company("JPMorgan Chase", "52", CompanySize.FORTUNE_500,
-                            "250,000-290,000", 1799, True, "New York", "USA",
-                            "Investment banking and financial services", "jpmorganchase.com"),
-                    Company("Bank of America", "52", CompanySize.FORTUNE_500,
-                            "200,000-220,000", 1998, True, "Charlotte", "USA",
-                            "Banking and financial services", "bankofamerica.com"),
-                    Company("Goldman Sachs", "52", CompanySize.FORTUNE_500,
-                            "40,000-50,000", 1869, True, "New York", "USA",
-                            "Investment banking", "goldmansachs.com"),
-                    Company("Morgan Stanley", "52", CompanySize.FORTUNE_500,
-                            "70,000-85,000", 1935, True, "New York", "USA",
-                            "Financial services", "morganstanley.com"),
-                    Company("Citigroup", "52", CompanySize.FORTUNE_500,
-                            "200,000-240,000", 1998, True, "New York", "USA",
-                            "Financial services", "citigroup.com"),
-                    Company("Wells Fargo", "52", CompanySize.FORTUNE_500,
-                            "230,000-260,000", 1852, True, "San Francisco", "USA",
-                            "Banking", "wellsfargo.com"),
-                    Company("State Farm", "52", CompanySize.FORTUNE_500,
-                            "55,000-65,000", 1922, False, "Bloomington", "USA",
-                            "Insurance", "statefarm.com"),
-                    Company("Berkshire Hathaway", "52", CompanySize.FORTUNE_500,
-                            "350,000-400,000", 1839, True, "Omaha", "USA",
-                            "Diversified insurance and investments", "berkshirehathaway.com"),
-                ],
-                CompanySize.LARGE: [
-                    Company("Charles Schwab", "52", CompanySize.LARGE,
-                            "30,000-35,000", 1971, True, "Westlake", "USA",
-                            "Brokerage and banking", "schwab.com"),
-                    Company("Capital One", "52", CompanySize.LARGE,
-                            "50,000-55,000", 1994, True, "McLean", "USA",
-                            "Banking and credit cards", "capitalone.com"),
-                ],
-                CompanySize.MIDMARKET: [
-                    Company("First Republic Bank", "52", CompanySize.MIDMARKET,
-                            "5,000-7,000", 1985, True, "San Francisco", "USA",
-                            "Private banking", "firstrepublic.com"),
-                    Company("Signature Bank", "52", CompanySize.MIDMARKET,
-                            "2,000-3,000", 2001, True, "New York", "USA",
-                            "Commercial banking", None),
-                ],
-                CompanySize.SMALL_BUSINESS: [
-                    Company("Valley Community Bank", "52", CompanySize.SMALL_BUSINESS,
-                            "50-100", 1985, False, "Sacramento", "USA",
-                            "Community banking", None),
-                ],
-                CompanySize.STARTUP: [
-                    Company("FinFlow Technologies", "52", CompanySize.STARTUP,
-                            "5-15", 2021, False, "New York", "USA",
-                            "Fintech startup", None),
-                ],
-            },
-
-            # Health Care and Social Assistance (62)
-            "62": {
-                CompanySize.FORTUNE_500: [
-                    Company("UnitedHealth Group", "62", CompanySize.FORTUNE_500,
-                            "350,000-400,000", 1977, True, "Minnetonka", "USA",
-                            "Health insurance and services", "uhc.com"),
-                    Company("CVS Health", "62", CompanySize.FORTUNE_500,
-                            "300,000-350,000", 1963, True, "Woonsocket", "USA",
-                            "Health care and pharmacy", "cvshealth.com"),
-                    Company("Kaiser Permanente", "62", CompanySize.FORTUNE_500,
-                            "200,000-220,000", 1945, False, "Oakland", "USA",
-                            "Integrated managed care", "kaiserpermanente.org"),
-                    Company("HCA Healthcare", "62", CompanySize.FORTUNE_500,
-                            "250,000-280,000", 1968, True, "Nashville", "USA",
-                            "Hospital operator", "hcahealthcare.com"),
-                    Company("Anthem", "62", CompanySize.FORTUNE_500,
-                            "90,000-100,000", 2014, True, "Indianapolis", "USA",
-                            "Health insurance", "anthem.com"),
-                ],
-                CompanySize.LARGE: [
-                    Company("Ascension Health", "62", CompanySize.LARGE,
-                            "150,000-160,000", 1999, False, "St. Louis", "USA",
-                            "Catholic health system", "ascension.org"),
-                    Company("Mayo Clinic", "62", CompanySize.LARGE,
-                            "70,000-80,000", 1864, False, "Rochester", "USA",
-                            "Academic medical center", "mayoclinic.org"),
-                ],
-                CompanySize.MIDMARKET: [
-                    Company("Regional Medical Center", "62", CompanySize.MIDMARKET,
-                            "2,000-5,000", 1965, False, "Various", "USA",
-                            "Regional hospital system", None),
-                ],
-                CompanySize.SMALL_BUSINESS: [
-                    Company("Valley Family Medicine", "62", CompanySize.SMALL_BUSINESS,
-                            "15-30", 2005, False, "Phoenix", "USA",
-                            "Family medical practice", None),
-                ],
-                CompanySize.STARTUP: [
-                    Company("TeleHealth Connect", "62", CompanySize.STARTUP,
-                            "5-12", 2020, False, "Austin", "USA",
-                            "Telemedicine startup", None),
-                ],
-            },
-
-            # Information Technology (51)
-            "51": {
-                CompanySize.FORTUNE_500: [
-                    Company("Apple", "51", CompanySize.FORTUNE_500,
-                            "150,000-165,000", 1976, True, "Cupertino", "USA",
-                            "Technology", "apple.com"),
-                    Company("Microsoft", "51", CompanySize.FORTUNE_500,
-                            "180,000-220,000", 1975, True, "Redmond", "USA",
-                            "Software and cloud services", "microsoft.com"),
-                    Company("Google", "51", CompanySize.FORTUNE_500,
-                            "180,000-190,000", 1998, True, "Mountain View", "USA",
-                            "Internet services and advertising", "google.com"),
-                    Company("Meta", "51", CompanySize.FORTUNE_500,
-                            "60,000-85,000", 2004, True, "Menlo Park", "USA",
-                            "Social media and technology", "meta.com"),
-                    Company("Amazon", "51", CompanySize.FORTUNE_500,
-                            "1,500,000+", 1994, True, "Seattle", "USA",
-                            "E-commerce and cloud services", "amazon.com"),
-                    Company("Netflix", "51", CompanySize.FORTUNE_500,
-                            "12,000-15,000", 1997, True, "Los Gatos", "USA",
-                            "Streaming entertainment", "netflix.com"),
-                    Company("Salesforce", "51", CompanySize.FORTUNE_500,
-                            "70,000-80,000", 1999, True, "San Francisco", "USA",
-                            "Cloud software", "salesforce.com"),
-                    Company("Adobe", "51", CompanySize.FORTUNE_500,
-                            "25,000-30,000", 1982, True, "San Jose", "USA",
-                            "Creative and document software", "adobe.com"),
-                ],
-                CompanySize.LARGE: [
-                    Company("Spotify", "51", CompanySize.LARGE,
-                            "8,000-10,000", 2006, True, "Stockholm", "Sweden",
-                            "Music streaming", "spotify.com"),
-                    Company("Twilio", "51", CompanySize.LARGE,
-                            "7,000-9,000", 2008, True, "San Francisco", "USA",
-                            "Cloud communications", "twilio.com"),
-                    Company("Atlassian", "51", CompanySize.LARGE,
-                            "8,000-10,000", 2002, True, "Sydney", "Australia",
-                            "Collaboration software", "atlassian.com"),
-                ],
-                CompanySize.MIDMARKET: [
-                    Company("Notion", "51", CompanySize.MIDMARKET,
-                            "400-600", 2016, False, "San Francisco", "USA",
-                            "Productivity software", "notion.so"),
-                    Company("Figma", "51", CompanySize.MIDMARKET,
-                            "800-1,200", 2012, False, "San Francisco", "USA",
-                            "Design software", "figma.com"),
-                ],
-                CompanySize.SMALL_BUSINESS: [
-                    Company("LocalTech Solutions", "51", CompanySize.SMALL_BUSINESS,
-                            "20-40", 2018, False, "Denver", "USA",
-                            "IT services", None),
-                ],
-                CompanySize.STARTUP: [
-                    Company("AI Innovations Lab", "51", CompanySize.STARTUP,
-                            "4-10", 2023, False, "San Francisco", "USA",
-                            "AI startup", None),
-                ],
-            },
-
-            # Continue for all 20 NAICS sectors...
-            # Manufacturing (31), Retail Trade (44), Construction (23),
-            # Education (61), Transportation (48), etc.
-        }
-
-    def get_company(self,
-                    naics_code: str,
-                    size: CompanySize | None = None,
-                    rng=None) -> Company:
-        """
-        Get a company for the given industry, optionally filtered by size.
-
-        If rng is provided, randomly sample. Otherwise return first match.
-        """
-        # Map to 2-digit NAICS
-        naics_2digit = naics_code[:2]
-
-        if naics_2digit not in self._companies:
-            # Fallback to generic company
-            return self._generate_generic_company(naics_code, size)
-
-        industry_companies = self._companies[naics_2digit]
-
-        if size:
-            if size in industry_companies:
-                companies = industry_companies[size]
-            else:
-                # Fallback to any size in this industry
-                companies = [c for sizes in industry_companies.values() for c in sizes]
-        else:
-            companies = [c for sizes in industry_companies.values() for c in sizes]
-
-        if not companies:
-            return self._generate_generic_company(naics_code, size)
-
-        if rng:
-            return rng.choice(companies)
-        return companies[0]
-
-    def _generate_generic_company(self, naics_code: str, size: CompanySize | None) -> Company:
-        """Generate a generic company description when no specific company available."""
-        naics_name = NAICS_SECTORS.get(naics_code[:2], "General Business")
-        size = size or CompanySize.MIDMARKET
-
-        size_desc = {
-            CompanySize.FORTUNE_500: "Fortune 500",
-            CompanySize.LARGE: "Large",
-            CompanySize.MIDMARKET: "Mid-sized",
-            CompanySize.SMALL_BUSINESS: "Small",
-            CompanySize.STARTUP: "Early-stage startup",
-        }
-
-        return Company(
-            name=f"{size_desc[size]} {naics_name} company",
-            naics_code=naics_code,
-            size=size,
-            employee_range=self._get_employee_range(size),
-            founded_year=None,
-            is_public=size in [CompanySize.FORTUNE_500, CompanySize.LARGE],
-            hq_city="United States",
-            hq_country="USA",
-            industry_description=naics_name,
-            email_domain=None
+        prompts = []
+        sampler = StratifiedSampler(
+            tasks=tasks,
+            templates=templates,
+            config=self.config.sampling,
+            rng=rng
         )
 
-    def _get_employee_range(self, size: CompanySize) -> str:
-        return {
-            CompanySize.FORTUNE_500: "10,000+",
-            CompanySize.LARGE: "1,000-10,000",
-            CompanySize.MIDMARKET: "100-1,000",
-            CompanySize.SMALL_BUSINESS: "10-100",
-            CompanySize.STARTUP: "1-10",
-        }[size]
+        for i in range(n_prompts):
+            # Sample task, ensuring diversity
+            task = sampler.sample_task()
+
+            # Sample industry using NAICS
+            industry = sampler.sample_industry(task.soc_code)
+
+            # Get real company for industry
+            company = self.company_db.get_company(
+                naics_code=industry,
+                seed=rng.randint(0, 2**32)
+            )
+
+            # Sample persona dimensions (from Phase 1 templates)
+            writer = sampler.sample_writer_persona(task, company)
+            recipients = sampler.sample_recipients(task, company)
+
+            # Sample communication dimensions
+            # Let channel emerge from task naturally, don't force categories
+            channel = self._infer_channel_from_task(task.task_statement)
+
+            formality = sampler.sample_formality(task, company)
+            urgency = sampler.sample_urgency(task)
+            # ... other dimensions
+
+            prompt = WritingPrompt(
+                prompt_id=f"p_{seed}_{i:05d}",
+                onet_task_id=task.task_id,
+                onet_soc_code=task.soc_code,
+                task_statement=task.task_statement,
+                # ... all fields
+                generation_phase=2,
+                random_seed=seed
+            )
+            prompts.append(prompt)
+
+        return prompts
+
+    def _infer_channel_from_task(self, task_statement: str) -> str:
+        """Infer channel naturally from task statement, not force into categories"""
+        # Return the natural communication medium implied by the task
+        # e.g., "Draft email" -> "email", "Prepare memo" -> "memo"
+        # If unclear, return "unspecified" and let Phase 3 determine
+        task_lower = task_statement.lower()
+
+        if "email" in task_lower:
+            return "email"
+        elif "memo" in task_lower or "memorandum" in task_lower:
+            return "memo"
+        elif "report" in task_lower:
+            return "report"
+        elif "letter" in task_lower:
+            return "letter"
+        elif "present" in task_lower:
+            return "presentation"
+        elif "post" in task_lower or "social" in task_lower:
+            return "social_media"
+        else:
+            return "unspecified"  # Let LLM enrichment determine
 ```
 
----
-
-## 5. Dual-Persona Judging Implementation (CRITICAL FIX)
-
-The PROMPT.md requires that each comparison be judged by BOTH the writing expert AND the simulated recipient. The draft plan showed these as options but didn't implement proper simultaneous dual-persona evaluation:
+### 2.3 Corrected Vote Aggregation with Persona Handling
 
 ```python
-# evaluation/dual_persona.py
+class VoteAggregator:
+    """Aggregate votes using majority-of-majorities with proper persona handling"""
 
-"""
-Dual-persona judging implementation.
-
-Per PROMPT.md requirements, each comparison must be evaluated by BOTH:
-1. A simulated writing expert (judging craft quality)
-2. A simulated target recipient (judging effectiveness for them)
-
-The final judgment aggregates across both personas.
-"""
-
-from dataclasses import dataclass
-from enum import Enum
-
-class JudgePersona(Enum):
-    WRITING_EXPERT = "writing_expert"
-    TARGET_RECIPIENT = "target_recipient"
-
-@dataclass
-class PersonaPrompt:
-    persona: JudgePersona
-    system_prompt: str
-    context_instructions: str
-
-PERSONA_PROMPTS = {
-    JudgePersona.WRITING_EXPERT: PersonaPrompt(
-        persona=JudgePersona.WRITING_EXPERT,
-        system_prompt="""You are an expert writing professional with 20+ years of experience
-evaluating business and professional communication. You have worked as an editor,
-communications director, and writing coach for Fortune 500 executives.
-
-Your expertise allows you to assess writing craft with nuance: not just whether
-something is "correct" but whether it achieves its communicative purpose elegantly.""",
-
-        context_instructions="""Assess the writing based on craft quality:
-
-1. **Clarity & Structure**: Is the writing clear, well-organized, and easy to follow?
-   Does it have a logical flow? Are transitions smooth?
-
-2. **Tone Calibration**: Is the tone precisely calibrated for this specific context?
-   Consider the relationship, formality level, and emotional situation.
-
-3. **Concision**: Is every word earning its place? No padding, no unnecessary
-   pleasantries, but also not missing key information?
-
-4. **Voice & Authenticity**: Does this read like genuine human writing?
-   Or does it have telltale AI patterns like:
-   - "I hope this email finds you well"
-   - "Please don't hesitate to reach out"
-   - "I'm happy to help with that"
-   - Excessive bullet points where prose is natural
-   - Overly formal hedging language
-
-5. **Professional Polish**: Would a skilled professional in this role produce
-   writing of this quality? Does it meet the standards for this context?
-
-6. **Instruction Following**: If specific constraints were given (length, format,
-   tone directives), were they followed precisely?"""
-    ),
-
-    JudgePersona.TARGET_RECIPIENT: PersonaPrompt(
-        persona=JudgePersona.TARGET_RECIPIENT,
-        system_prompt="""You are the intended recipient of this communication.
-You will be given context about who you are, your relationship to the sender,
-and the situation. Evaluate the message from your perspective as the receiver.
-
-Consider: Would this message achieve its purpose with you? Would you respond
-positively? Does it respect your time and address your needs?""",
-
-        context_instructions="""Based on your role as the recipient, evaluate:
-
-1. **Effectiveness**: Does this message accomplish what it needs to?
-   Would you understand what's being asked/communicated?
-
-2. **Actionability**: Can you act on this? Is it clear what (if anything)
-   you need to do next?
-
-3. **Appropriateness**: Given your relationship with the sender and the
-   context, is the tone appropriate? Too formal? Too casual?
-
-4. **Respect for Your Time**: Is the length appropriate? Does it get to
-   the point without being curt?
-
-5. **Authenticity**: Does this feel like a real message from a real person?
-   Or does it feel generated/template-like?
-
-6. **Recipient-Specific Fit**: Does it acknowledge your specific situation,
-   needs, or concerns? Or is it generic?"""
-    )
-}
-
-class DualPersonaJudge:
-    """
-    Implements dual-persona judging for each comparison.
-
-    For each model pair comparison:
-    1. Get 5 votes from each judge model as the writing expert
-    2. Get 5 votes from each judge model as the target recipient
-    3. Aggregate within each persona
-    4. Combine across personas for final judgment
-    """
-
-    def __init__(self,
-                 api_client,
-                 judge_models: list[str],
-                 votes_per_judge: int = 5):
-        self.api = api_client
-        self.judge_models = judge_models
-        self.votes_per_judge = votes_per_judge
-
-    async def judge_comparison(self,
-                                prompt: WritingPrompt,
-                                response_a: Response,
-                                response_b: Response,
-                                gemini_position: str) -> DualPersonaJudgment:
+    def aggregate(
+        self,
+        votes: list[JudgmentVote],
+        model_pair: ModelPair
+    ) -> ComparisonResult:
         """
-        Run full dual-persona judging for a comparison.
-
-        Returns aggregated judgment across both personas and all judges.
-        """
-
-        all_judgments = []
-
-        for judge_model in self.judge_models:
-            for persona in [JudgePersona.WRITING_EXPERT, JudgePersona.TARGET_RECIPIENT]:
-                persona_prompt = self._build_persona_prompt(
-                    prompt, response_a, response_b, persona
-                )
-
-                votes = await self._collect_votes(
-                    judge_model, persona_prompt, self.votes_per_judge
-                )
-
-                # Map votes back to actual models
-                mapped_votes = self._map_votes_to_models(votes, gemini_position)
-
-                all_judgments.append(PersonaJudgment(
-                    judge_model=judge_model,
-                    persona=persona,
-                    votes=mapped_votes,
-                    majority=self._compute_majority(mapped_votes)
-                ))
-
-        return self._aggregate_dual_persona(all_judgments)
-
-    def _build_persona_prompt(self,
-                               prompt: WritingPrompt,
-                               response_a: Response,
-                               response_b: Response,
-                               persona: JudgePersona) -> str:
-        """Build the full judge prompt with persona-specific instructions."""
-
-        persona_config = PERSONA_PROMPTS[persona]
-
-        # For target recipient, customize based on the actual recipient persona
-        if persona == JudgePersona.TARGET_RECIPIENT:
-            recipient_context = self._build_recipient_context(prompt)
-        else:
-            recipient_context = ""
-
-        return f"""{persona_config.system_prompt}
-
-## Writing Task Context
-
-{self._format_task_context(prompt)}
-
-{recipient_context}
-
-## Response A
-
-{response_a.text}
-
-## Response B
-
-{response_b.text}
-
-## Evaluation Criteria
-
-{persona_config.context_instructions}
-
-## Your Judgment
-
-Based on your expertise/perspective and the specific context of this writing task,
-which response is better?
-
-Respond with ONLY one of:
-- "A" if Response A is clearly better
-- "B" if Response B is clearly better
-- "TIE" if they are roughly equivalent
-
-Your judgment:"""
-
-    def _build_recipient_context(self, prompt: WritingPrompt) -> str:
-        """Build recipient-specific context for the target recipient persona."""
-
-        recipient = prompt.recipients[0] if prompt.recipients else None
-        if not recipient:
-            return ""
-
-        return f"""## Your Role as Recipient
-
-You are {recipient.name}, {recipient.title} at {prompt.company.name}.
-Your relationship with the sender: {prompt.relationship_context}
-The emotional context: {prompt.emotional_context}
-The urgency level: {prompt.urgency_level}
-
-Consider how you would receive this message given who you are and the situation."""
-
-    def _aggregate_dual_persona(self,
-                                 judgments: list[PersonaJudgment]) -> DualPersonaJudgment:
-        """
-        Aggregate judgments across both personas using majority-of-majorities.
-
-        Structure:
-        1. For each judge model, for each persona: compute majority of 5 votes
-        2. For each judge model: combine two persona majorities
-        3. Across all judges: compute final majority
-
-        Per PROMPT.md: "majority of the 3 judge winners"
+        Aggregation logic:
+        1. For each judge model, aggregate across both personas
+        2. Get majority within each judge (across personas and votes)
+        3. Take majority of the 3 judge majorities
         """
 
         # Group by judge model
-        by_judge = defaultdict(list)
-        for j in judgments:
-            by_judge[j.judge_model].append(j)
+        by_judge: dict[str, list[JudgmentVote]] = defaultdict(list)
+        for vote in votes:
+            by_judge[vote.judge_model].append(vote)
 
-        judge_winners = []
-        for judge_model, judge_judgments in by_judge.items():
-            # Get majority per persona
-            expert_judgment = next(
-                j for j in judge_judgments if j.persona == JudgePersona.WRITING_EXPERT
-            )
-            recipient_judgment = next(
-                j for j in judge_judgments if j.persona == JudgePersona.TARGET_RECIPIENT
-            )
+        judge_majorities: dict[str, str] = {}
+        judge_breakdowns: dict[str, JudgeBreakdown] = {}
 
-            # If both personas agree, that's the judge's verdict
-            if expert_judgment.majority == recipient_judgment.majority:
-                judge_winners.append(expert_judgment.majority)
+        for judge_model, judge_votes in by_judge.items():
+            # Count wins across all personas and votes for this judge
+            gemini_wins = sum(1 for v in judge_votes if v.winner_model == model_pair.gemini)
+            competitor_wins = sum(1 for v in judge_votes if v.winner_model == model_pair.competitor)
+            ties = sum(1 for v in judge_votes if v.winner == "tie")
+
+            total_votes = len(judge_votes)
+
+            # Determine this judge's majority verdict
+            if gemini_wins > competitor_wins and gemini_wins > ties:
+                judge_majorities[judge_model] = "gemini"
+            elif competitor_wins > gemini_wins and competitor_wins > ties:
+                judge_majorities[judge_model] = "competitor"
             else:
-                # If they disagree, could use various strategies:
-                # Option 1: Expert wins
-                # Option 2: Count as tie
-                # Option 3: Weight by confidence
-                # For now: if either says tie, use the other; else tie
-                if expert_judgment.majority == "tie":
-                    judge_winners.append(recipient_judgment.majority)
-                elif recipient_judgment.majority == "tie":
-                    judge_winners.append(expert_judgment.majority)
-                else:
-                    judge_winners.append("tie")
+                judge_majorities[judge_model] = "tie"
 
-        # Final majority across judges
-        final_winner = self._compute_majority(judge_winners)
+            # Store breakdown for analysis
+            judge_breakdowns[judge_model] = JudgeBreakdown(
+                gemini_votes=gemini_wins,
+                competitor_votes=competitor_wins,
+                tie_votes=ties,
+                total_votes=total_votes,
+                majority=judge_majorities[judge_model],
+                # Persona-level breakdown
+                by_persona={
+                    persona: self._aggregate_persona_votes(
+                        [v for v in judge_votes if v.judge_persona == persona],
+                        model_pair
+                    )
+                    for persona in ["writing_expert", "recipient"]
+                }
+            )
 
-        return DualPersonaJudgment(
-            judgments=judgments,
-            judge_winners=judge_winners,
+        # Majority of majorities
+        final_counts = Counter(judge_majorities.values())
+
+        if final_counts["gemini"] > final_counts["competitor"]:
+            final_winner = "gemini"
+        elif final_counts["competitor"] > final_counts["gemini"]:
+            final_winner = "competitor"
+        else:
+            final_winner = "tie"
+
+        return ComparisonResult(
+            # ... standard fields
             final_winner=final_winner,
-            agreement_rate=self._compute_agreement(judgments)
+            judge_agreement_count=max(final_counts.values()),
+            judge_breakdowns=judge_breakdowns,  # New: detailed breakdown
+            # ...
         )
 
-    def _compute_majority(self, votes: list[str]) -> str:
-        """Compute majority vote from a list of 'gemini'/'competitor'/'tie' votes."""
-        counts = {"gemini": 0, "competitor": 0, "tie": 0}
-        for v in votes:
-            counts[v] = counts.get(v, 0) + 1
-
-        if counts["gemini"] > counts["competitor"] + counts["tie"]:
-            return "gemini"
-        elif counts["competitor"] > counts["gemini"] + counts["tie"]:
-            return "competitor"
-        else:
-            return "tie"
+    def _aggregate_persona_votes(
+        self,
+        votes: list[JudgmentVote],
+        model_pair: ModelPair
+    ) -> PersonaBreakdown:
+        """Get breakdown for a specific persona"""
+        return PersonaBreakdown(
+            gemini_votes=sum(1 for v in votes if v.winner_model == model_pair.gemini),
+            competitor_votes=sum(1 for v in votes if v.winner_model == model_pair.competitor),
+            tie_votes=sum(1 for v in votes if v.winner == "tie")
+        )
 ```
 
----
-
-## 6. SQLite Concurrency Handling (CRITICAL FIX)
-
-The draft plan uses SQLite with async workers but doesn't address write contention:
+### 2.4 Complete Flash-Tier Configuration
 
 ```python
-# storage/database.py
+# Add Flash-tier model pairs to all presets
+FLASH_MODEL_PAIRS = [
+    ModelPair("google/gemini-3-flash", "openai/gpt-4.1"),
+    ModelPair("google/gemini-3-flash", "anthropic/claude-sonnet"),
+]
 
-"""
-SQLite database operations with proper async handling.
+PRO_MODEL_PAIRS = [
+    ModelPair("google/gemini-3-pro", "openai/gpt-5.2-thinking"),
+    ModelPair("google/gemini-3-pro", "anthropic/claude-opus-4.5"),
+    ModelPair("google/gemini-3-pro", "x-ai/grok-4.1-thinking"),
+    ModelPair("google/gemini-3-pro", "moonshot/kimi-k2-thinking"),
+]
 
-Uses WAL mode for better concurrent read performance and
-write coalescing to avoid contention from multiple workers.
-"""
+ALL_MODEL_PAIRS = PRO_MODEL_PAIRS + FLASH_MODEL_PAIRS
 
-import asyncio
-from contextlib import asynccontextmanager
-from pathlib import Path
-import aiosqlite
-from sqlalchemy import create_engine, text
-from sqlalchemy.pool import StaticPool
+# Updated preset 6 (Standard Eval) as example
+PRESETS[6] = EvalConfig(
+    name="Standard Eval",
+    num_prompts=500,
+    model_pairs=ALL_MODEL_PAIRS,  # Include both tiers
+    model_tier_filter=None,  # Run both tiers
+    judge_models=[
+        "anthropic/claude-opus-4.5",
+        "openai/gpt-5.2",
+        "google/gemini-3-pro"
+    ],
+    votes_per_judge=5,
+    judge_personas=["writing_expert", "recipient"],
+    estimated_cost=500,
+    estimated_time_minutes=180,
+    description="Standard evaluation run with all model tiers"
+)
 
-class AsyncDatabase:
-    """
-    Async SQLite database with WAL mode and write coalescing.
+# Add tier filtering option
+@app.command()
+def run(
+    # ... existing options
+    tier: str = typer.Option(None, "--tier", help="Model tier: 'pro', 'flash', or 'all'"),
+):
+    if tier == "pro":
+        config.model_pairs = [p for p in config.model_pairs if "pro" in p.gemini]
+    elif tier == "flash":
+        config.model_pairs = [p for p in config.model_pairs if "flash" in p.gemini]
+```
 
-    Design decisions:
-    1. WAL mode: Allows concurrent reads during writes
-    2. Single writer: All writes go through a queue to avoid contention
-    3. Batch commits: Coalesce multiple writes into single transactions
-    4. Read replicas: Reads can use separate connections
-    """
+### 2.5 Instruction-Following Verification System
 
-    def __init__(self, db_path: Path):
-        self.db_path = db_path
-        self._write_queue: asyncio.Queue = asyncio.Queue()
-        self._write_task: asyncio.Task | None = None
-        self._read_connection: aiosqlite.Connection | None = None
+```python
+class InstructionComplianceChecker:
+    """Verify whether responses comply with explicit constraints"""
 
-    async def initialize(self):
-        """Initialize database with schema and WAL mode."""
-        async with aiosqlite.connect(self.db_path) as db:
-            # Enable WAL mode for better concurrency
-            await db.execute("PRAGMA journal_mode=WAL")
-            await db.execute("PRAGMA synchronous=NORMAL")
-            await db.execute("PRAGMA cache_size=-64000")  # 64MB cache
+    def __init__(self):
+        self.checkers = {
+            "length": self._check_length_constraint,
+            "format": self._check_format_constraint,
+            "tone": self._check_tone_constraint,
+            "exclusion": self._check_exclusion_constraint,
+            "inclusion": self._check_inclusion_constraint,
+        }
 
-            # Create schema
-            await self._create_schema(db)
-            await db.commit()
+    def check_compliance(
+        self,
+        response: ModelResponse,
+        constraints: list[InstructionConstraint]
+    ) -> dict[str, ConstraintResult]:
+        """Check all constraints and return compliance results"""
+        results = {}
 
-        # Start write worker
-        self._write_task = asyncio.create_task(self._write_worker())
+        for constraint in constraints:
+            if constraint.verifiable:
+                checker = self.checkers.get(constraint.type)
+                if checker:
+                    results[constraint.constraint] = checker(
+                        response.response_text, constraint
+                    )
+                else:
+                    results[constraint.constraint] = ConstraintResult(
+                        compliant=None,
+                        reason="No verifier for this constraint type"
+                    )
 
-    async def _create_schema(self, db: aiosqlite.Connection):
-        """Create all tables."""
-        await db.executescript(SCHEMA_SQL)
+        return results
 
-    async def _write_worker(self):
-        """
-        Single writer that processes all write operations.
+    def _check_length_constraint(
+        self,
+        text: str,
+        constraint: InstructionConstraint
+    ) -> ConstraintResult:
+        """Check word/character count constraints"""
+        word_count = len(text.split())
 
-        Batches writes together for efficiency.
-        """
-        batch = []
-        BATCH_SIZE = 50
-        BATCH_TIMEOUT = 0.5  # seconds
+        # Parse constraint like "under 100 words" or "at least 500 words"
+        import re
+        match = re.search(r'(under|at least|exactly|between)\s+(\d+)(?:\s+(?:and|to)\s+(\d+))?\s+words?', constraint.constraint.lower())
 
-        while True:
-            try:
-                # Wait for first item
-                item = await asyncio.wait_for(
-                    self._write_queue.get(),
-                    timeout=BATCH_TIMEOUT if batch else None
+        if not match:
+            return ConstraintResult(compliant=None, reason="Could not parse length constraint")
+
+        constraint_type = match.group(1)
+        limit1 = int(match.group(2))
+        limit2 = int(match.group(3)) if match.group(3) else None
+
+        if constraint_type == "under":
+            compliant = word_count < limit1
+        elif constraint_type == "at least":
+            compliant = word_count >= limit1
+        elif constraint_type == "exactly":
+            compliant = word_count == limit1
+        elif constraint_type == "between" and limit2:
+            compliant = limit1 <= word_count <= limit2
+        else:
+            compliant = None
+
+        return ConstraintResult(
+            compliant=compliant,
+            actual_value=word_count,
+            expected=constraint.constraint
+        )
+
+    def _check_format_constraint(
+        self,
+        text: str,
+        constraint: InstructionConstraint
+    ) -> ConstraintResult:
+        """Check format constraints (bullets, paragraphs, headers)"""
+        constraint_lower = constraint.constraint.lower()
+
+        if "bullet" in constraint_lower:
+            # Count bullet points
+            bullet_count = text.count("- ") + text.count("• ") + text.count("* ")
+            match = re.search(r'(\d+)\s+bullet', constraint_lower)
+            if match:
+                expected = int(match.group(1))
+                return ConstraintResult(
+                    compliant=(bullet_count == expected),
+                    actual_value=bullet_count,
+                    expected=f"{expected} bullets"
                 )
-                batch.append(item)
 
-                # Collect more items if available (non-blocking)
-                while len(batch) < BATCH_SIZE:
-                    try:
-                        item = self._write_queue.get_nowait()
-                        batch.append(item)
-                    except asyncio.QueueEmpty:
-                        break
+        if "paragraph form only" in constraint_lower:
+            has_bullets = any(marker in text for marker in ["- ", "• ", "* "])
+            has_numbered = bool(re.search(r'^\d+\.\s', text, re.MULTILINE))
+            return ConstraintResult(
+                compliant=not (has_bullets or has_numbered),
+                reason="Must be paragraph form without lists"
+            )
 
-            except asyncio.TimeoutError:
-                pass  # Timeout reached, process current batch
+        return ConstraintResult(compliant=None, reason="Unrecognized format constraint")
 
-            if batch:
-                await self._process_batch(batch)
-                batch = []
+    def _check_exclusion_constraint(
+        self,
+        text: str,
+        constraint: InstructionConstraint
+    ) -> ConstraintResult:
+        """Check exclusion constraints (do not mention X)"""
+        # Parse "do not mention the budget" style constraints
+        match = re.search(r'(?:do not|don\'t|avoid)\s+mention(?:ing)?\s+(?:the\s+)?(.+)', constraint.constraint.lower())
 
-    async def _process_batch(self, batch: list):
-        """Process a batch of write operations in a single transaction."""
-        async with aiosqlite.connect(self.db_path) as db:
-            try:
-                for operation in batch:
-                    if operation["type"] == "execute":
-                        await db.execute(operation["sql"], operation["params"])
-                    elif operation["type"] == "executemany":
-                        await db.executemany(operation["sql"], operation["params"])
+        if match:
+            excluded_term = match.group(1).strip()
+            contains_term = excluded_term.lower() in text.lower()
+            return ConstraintResult(
+                compliant=not contains_term,
+                reason=f"Text {'contains' if contains_term else 'does not contain'} '{excluded_term}'"
+            )
 
-                await db.commit()
+        return ConstraintResult(compliant=None, reason="Could not parse exclusion constraint")
 
-                # Signal completion to all waiters
-                for operation in batch:
-                    if operation.get("future"):
-                        operation["future"].set_result(True)
+    def _check_tone_constraint(
+        self,
+        text: str,
+        constraint: InstructionConstraint
+    ) -> ConstraintResult:
+        """Tone constraints require LLM verification - mark for judge evaluation"""
+        return ConstraintResult(
+            compliant=None,
+            reason="Tone compliance requires judge evaluation",
+            requires_judge_verification=True
+        )
 
-            except Exception as e:
-                await db.rollback()
-                for operation in batch:
-                    if operation.get("future"):
-                        operation["future"].set_exception(e)
+    def _check_inclusion_constraint(
+        self,
+        text: str,
+        constraint: InstructionConstraint
+    ) -> ConstraintResult:
+        """Check inclusion constraints (must include X)"""
+        match = re.search(r'(?:must|should)\s+(?:include|mention)\s+(.+)', constraint.constraint.lower())
 
-    async def write(self, sql: str, params: tuple = ()) -> None:
-        """Queue a write operation."""
-        future = asyncio.get_event_loop().create_future()
-        await self._write_queue.put({
-            "type": "execute",
-            "sql": sql,
-            "params": params,
-            "future": future
-        })
-        await future
+        if match:
+            required_term = match.group(1).strip()
+            contains_term = required_term.lower() in text.lower()
+            return ConstraintResult(
+                compliant=contains_term,
+                reason=f"Text {'contains' if contains_term else 'does not contain'} '{required_term}'"
+            )
 
-    async def write_many(self, sql: str, params_list: list[tuple]) -> None:
-        """Queue a batch write operation."""
-        future = asyncio.get_event_loop().create_future()
-        await self._write_queue.put({
-            "type": "executemany",
-            "sql": sql,
-            "params": params_list,
-            "future": future
-        })
-        await future
+        return ConstraintResult(compliant=None, reason="Could not parse inclusion constraint")
+```
 
-    @asynccontextmanager
-    async def read_connection(self):
-        """Get a read connection (can be used concurrently)."""
-        conn = await aiosqlite.connect(self.db_path)
-        conn.row_factory = aiosqlite.Row
-        try:
-            yield conn
-        finally:
-            await conn.close()
+### 2.6 Ambiguity Handling Behavior Tracking
 
-    async def read_one(self, sql: str, params: tuple = ()):
-        """Execute a read query and return one row."""
-        async with self.read_connection() as conn:
-            async with conn.execute(sql, params) as cursor:
-                return await cursor.fetchone()
+```python
+class AmbiguityBehaviorAnalyzer:
+    """Analyze how models handle deliberately ambiguous prompts"""
 
-    async def read_all(self, sql: str, params: tuple = ()):
-        """Execute a read query and return all rows."""
-        async with self.read_connection() as conn:
-            async with conn.execute(sql, params) as cursor:
-                return await cursor.fetchall()
+    BEHAVIOR_PATTERNS = {
+        "asks_clarification": [
+            r"(?:what|which|could you|can you)\s+(?:specific|clarify|tell me more)",
+            r"(?:to clarify|for clarification)",
+            r"(?:i\'m not sure|unclear|need more information)",
+            r"(?:do you mean|are you referring to)",
+        ],
+        "makes_assumptions": [
+            r"(?:i\'ll assume|assuming that|i\'m assuming)",
+            r"(?:based on|given that|since you mentioned)",
+            r"(?:i\'ll proceed with|let me interpret this as)",
+        ],
+        "hedges_appropriately": [
+            r"(?:if applicable|if relevant|depending on)",
+            r"(?:you may want to|consider|might need to)",
+            r"(?:please adjust|feel free to modify)",
+        ],
+        "hallucinated_specifics": [
+            # Detect when model invents specific details not in prompt
+            # This requires comparison with prompt content
+        ]
+    }
 
-    async def close(self):
-        """Shutdown database cleanly."""
-        if self._write_task:
-            self._write_task.cancel()
-            try:
-                await self._write_task
-            except asyncio.CancelledError:
-                pass
+    async def analyze_response(
+        self,
+        prompt: WritingPrompt,
+        response: ModelResponse
+    ) -> AmbiguityBehavior:
+        """Analyze how the model handled an ambiguous prompt"""
 
-        # Process any remaining writes
-        while not self._write_queue.empty():
-            batch = []
-            while not self._write_queue.empty():
-                batch.append(await self._write_queue.get())
-            if batch:
-                await self._process_batch(batch)
+        if not prompt.deliberate_ambiguity:
+            return None
 
+        behaviors = {}
 
-SCHEMA_SQL = """
--- Core tables
-CREATE TABLE IF NOT EXISTS eval_runs (
-    run_id TEXT PRIMARY KEY,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    config_json TEXT,
-    preset_name TEXT,
-    random_seed INTEGER,
-    status TEXT,
-    budget_limit REAL,
-    cost_spent REAL DEFAULT 0
-);
+        # Pattern-based detection
+        for behavior, patterns in self.BEHAVIOR_PATTERNS.items():
+            if behavior == "hallucinated_specifics":
+                behaviors[behavior] = await self._detect_hallucination(prompt, response)
+            else:
+                behaviors[behavior] = self._detect_pattern(response.response_text, patterns)
+
+        return AmbiguityBehavior(
+            prompt_id=prompt.prompt_id,
+            ambiguity_type=prompt.ambiguity_type,
+            asks_clarification=behaviors.get("asks_clarification", False),
+            makes_assumptions=behaviors.get("makes_assumptions", False),
+            hedges_appropriately=behaviors.get("hedges_appropriately", False),
+            hallucinated_specifics=behaviors.get("hallucinated_specifics", False),
+            raw_patterns=behaviors
+        )
+
+    def _detect_pattern(self, text: str, patterns: list[str]) -> bool:
+        """Check if any pattern matches in the text"""
+        text_lower = text.lower()
+        return any(re.search(pattern, text_lower) for pattern in patterns)
+
+    async def _detect_hallucination(
+        self,
+        prompt: WritingPrompt,
+        response: ModelResponse
+    ) -> bool:
+        """Detect if model hallucinated specific details not in prompt"""
+        # Extract specific details from response (names, numbers, dates)
+        response_specifics = self._extract_specifics(response.response_text)
+        prompt_content = prompt.enriched_prompt
+
+        # If ambiguity type is "underspecified" and response contains
+        # specific details not present in prompt, likely hallucination
+        if prompt.ambiguity_type == "underspecified":
+            for specific in response_specifics:
+                if specific not in prompt_content:
+                    return True
+
+        return False
+
+    def _extract_specifics(self, text: str) -> list[str]:
+        """Extract specific details like names, dates, numbers"""
+        specifics = []
+
+        # Extract dates
+        dates = re.findall(r'\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}(?:,? \d{4})?\b', text)
+        specifics.extend(dates)
+
+        # Extract dollar amounts
+        amounts = re.findall(r'\$[\d,]+(?:\.\d{2})?', text)
+        specifics.extend(amounts)
+
+        # Extract percentages
+        percentages = re.findall(r'\d+(?:\.\d+)?%', text)
+        specifics.extend(percentages)
+
+        return specifics
+```
+
+### 2.7 Corrected Database Schema
+
+```sql
+-- Complete schema including all required fields from PROMPT.md
 
 CREATE TABLE IF NOT EXISTS prompts (
     prompt_id TEXT PRIMARY KEY,
-    run_id TEXT REFERENCES eval_runs(run_id),
-    source_task_id TEXT,
-    onetsoc_code TEXT,
-    occupation_title TEXT,
-    job_zone INTEGER,
-    soc_major_code TEXT,
-    naics_code TEXT,
-    writing_category TEXT,
-    formality_level INTEGER,
-    writer_generation TEXT,
-    company_size TEXT,
-    company_name TEXT,
-    urgency_level TEXT,
+    run_id TEXT NOT NULL REFERENCES eval_runs(run_id),
+
+    -- O*NET context
+    onet_task_id TEXT NOT NULL,
+    onet_soc_code TEXT NOT NULL,
+    occupation_title TEXT NOT NULL,
+    occupation_description TEXT,
+    job_zone INTEGER NOT NULL,
+    soc_major_group TEXT NOT NULL,
+
+    -- Task content
+    task_statement TEXT NOT NULL,
+    enriched_prompt TEXT NOT NULL,
+
+    -- Company context (JSON)
+    company_json JSON NOT NULL,
+
+    -- Personas (JSON)
+    writer_json JSON NOT NULL,
+    recipients_json JSON NOT NULL,
+    cc_recipients_json JSON,
+
+    -- Communication context (all fields from schema)
+    channel TEXT NOT NULL,
+    formality_level INTEGER NOT NULL,
+    urgency_level INTEGER NOT NULL,
+    relationship_context TEXT NOT NULL,
+    audience_size TEXT NOT NULL,
     emotional_context TEXT,
-    is_sensitive_topic BOOLEAN,
-    sensitive_topic_category TEXT,
-    is_revision_task BOOLEAN,
-    has_competing_objectives BOOLEAN,
-    prompt_text TEXT,
-    created_at TIMESTAMP
+    message_position TEXT NOT NULL,
+
+    -- Additional context
+    temporal_context TEXT,
+    attachments_json JSON,
+    prior_message TEXT,
+    tone_example TEXT,
+    competing_objectives_json JSON,
+
+    -- Task types
+    is_revision_task BOOLEAN DEFAULT FALSE,
+    original_text TEXT,
+    revision_instruction TEXT,
+
+    -- Ambiguity
+    deliberate_ambiguity BOOLEAN DEFAULT FALSE,
+    ambiguity_type TEXT,
+
+    -- Constraints
+    explicit_constraints_json JSON,
+
+    -- Categorization
+    writing_category TEXT NOT NULL,
+    sensitive_category TEXT,
+
+    -- Language (for future extension)
+    language TEXT DEFAULT 'en',
+    language_variant TEXT DEFAULT 'en-US',
+
+    -- Regional variants for analysis
+    writer_english_variant TEXT DEFAULT 'en-US',
+    recipient_english_variant TEXT DEFAULT 'en-US',
+
+    -- Generation metadata
+    generation_phase INTEGER NOT NULL,
+    generation_model TEXT,
+    generation_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    random_seed INTEGER NOT NULL,
+
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Response table with all tracking fields
 CREATE TABLE IF NOT EXISTS responses (
     response_id TEXT PRIMARY KEY,
-    prompt_id TEXT REFERENCES prompts(prompt_id),
-    model_name TEXT,
-    model_version TEXT,  -- ADDED: exact model version from API
-    model_tier TEXT,
-    response_text TEXT,
-    latency_ms INTEGER,
+    prompt_id TEXT NOT NULL REFERENCES prompts(prompt_id),
+    model_id TEXT NOT NULL,
+
+    -- Response content
+    response_text TEXT NOT NULL,
+
+    -- Length metrics
+    response_length_chars INTEGER NOT NULL,
+    response_length_words INTEGER NOT NULL,
+    response_length_tokens INTEGER NOT NULL,
+
+    -- Timing
+    response_time_ms INTEGER NOT NULL,
+
+    -- Status and failures
+    status TEXT NOT NULL,  -- success, refused, error, timeout, incomplete, off_topic
+    refusal_category TEXT,  -- safety, capability, misunderstanding, incomplete, off_topic
+    error_message TEXT,
+
+    -- Format detection
+    uses_bullet_points BOOLEAN,
+    uses_headers BOOLEAN,
+    uses_numbered_list BOOLEAN,
+    greeting_type TEXT,
+    signoff_type TEXT,
+    format_metadata_json JSON,
+
+    -- Constraint compliance (if applicable)
+    constraint_compliance_json JSON,
+
+    -- Ambiguity behavior (if applicable)
+    ambiguity_behavior_json JSON,
+
+    -- API metadata
+    openrouter_request_id TEXT,
     input_tokens INTEGER,
     output_tokens INTEGER,
-    finish_reason TEXT,
-    is_failure BOOLEAN,
-    failure_category TEXT,
-    word_count INTEGER,
-    char_count INTEGER,
-    cost_usd REAL,  -- ADDED: actual cost for this response
-    created_at TIMESTAMP
+    cost_usd REAL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(prompt_id, model_id)
 );
 
-CREATE TABLE IF NOT EXISTS comparisons (
-    comparison_id TEXT PRIMARY KEY,
-    prompt_id TEXT REFERENCES prompts(prompt_id),
-    gemini_response_id TEXT REFERENCES responses(response_id),
-    competitor_response_id TEXT REFERENCES responses(response_id),
-    competitor_model TEXT,
-    final_winner TEXT,
-    gemini_auto_loss BOOLEAN,
-    competitor_auto_loss BOOLEAN,
-    created_at TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS judgments (
-    judgment_id TEXT PRIMARY KEY,
-    comparison_id TEXT REFERENCES comparisons(comparison_id),
-    judge_model TEXT,
-    judge_model_version TEXT,  -- ADDED
-    judge_persona TEXT,
-    vote_number INTEGER,
-    presentation_order TEXT,
-    raw_judgment TEXT,
-    winner TEXT,
-    judge_response_text TEXT,
-    latency_ms INTEGER,
-    cost_usd REAL,  -- ADDED
-    created_at TIMESTAMP
-);
-
--- Indexes
-CREATE INDEX IF NOT EXISTS idx_prompts_run ON prompts(run_id);
-CREATE INDEX IF NOT EXISTS idx_prompts_occupation ON prompts(onetsoc_code);
-CREATE INDEX IF NOT EXISTS idx_responses_prompt ON responses(prompt_id);
-CREATE INDEX IF NOT EXISTS idx_comparisons_prompt ON comparisons(prompt_id);
-CREATE INDEX IF NOT EXISTS idx_judgments_comparison ON judgments(comparison_id);
-"""
+-- Additional indexes for analysis queries
+CREATE INDEX idx_prompts_audience_size ON prompts(audience_size);
+CREATE INDEX idx_prompts_emotional_context ON prompts(emotional_context);
+CREATE INDEX idx_prompts_message_position ON prompts(message_position);
+CREATE INDEX idx_prompts_writer_variant ON prompts(writer_english_variant);
+CREATE INDEX idx_prompts_recipient_variant ON prompts(recipient_english_variant);
+CREATE INDEX idx_responses_status ON responses(status);
+CREATE INDEX idx_responses_refusal_category ON responses(refusal_category);
 ```
 
----
-
-## 7. Budget Enforcement and Cost Tracking (NEW)
-
-A critical missing piece in the draft plan. The system must allow users to set hard budget limits:
+### 2.8 Complete Statistical Analysis with Effect Sizes
 
 ```python
-# config/budget.py
+class StatisticalAnalyzer:
+    """Comprehensive statistical analysis including effect sizes"""
 
-"""
-Budget management and cost tracking.
+    async def compute_win_rates_with_effect_sizes(
+        self,
+        model_pair: Optional[ModelPair] = None
+    ) -> dict[str, WinRateResult]:
+        """Compute win rates with confidence intervals AND effect sizes"""
 
-Provides:
-1. Pre-run cost estimates
-2. Hard budget limits that halt evaluation
-3. Real-time cost tracking during runs
-"""
+        comparisons = await self._fetch_comparisons(model_pair)
 
-from dataclasses import dataclass, field
-from datetime import datetime
-import asyncio
+        by_pair = self._group_by_pair(comparisons)
 
-@dataclass
-class BudgetConfig:
-    """Budget configuration for an evaluation run."""
-    soft_limit_usd: float | None = None  # Warning threshold
-    hard_limit_usd: float | None = None  # Halt threshold
-    alert_at_percent: float = 80  # Alert when reaching this % of limit
+        results = {}
+        for pair_key, pair_comparisons in by_pair.items():
+            n = len(pair_comparisons)
+            gemini_wins = sum(1 for c in pair_comparisons if c['final_winner'] == 'gemini')
+            competitor_wins = sum(1 for c in pair_comparisons if c['final_winner'] == 'competitor')
+            ties = sum(1 for c in pair_comparisons if c['final_winner'] == 'tie')
 
-@dataclass
-class CostAccumulator:
-    """Thread-safe cost accumulator with budget enforcement."""
-    budget: BudgetConfig
-    total_spent: float = 0.0
-    response_generation_cost: float = 0.0
-    judging_cost: float = 0.0
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    _halt_requested: bool = False
-    _alert_issued: bool = False
+            win_rate = gemini_wins / n if n > 0 else 0
 
-    async def add_cost(self, amount: float, category: str = "general") -> CostStatus:
-        """
-        Add cost and check against budget limits.
+            # Wilson score confidence interval
+            ci_lower, ci_upper = self._wilson_ci(gemini_wins, n)
 
-        Returns status indicating if evaluation should continue.
-        """
-        async with self._lock:
-            self.total_spent += amount
+            # Effect size: Odds Ratio
+            odds_ratio = self._compute_odds_ratio(gemini_wins, competitor_wins)
 
-            if category == "response":
-                self.response_generation_cost += amount
-            elif category == "judging":
-                self.judging_cost += amount
+            # Effect size: Cohen's h (for proportions)
+            cohens_h = self._compute_cohens_h(win_rate)
 
-            # Check hard limit
-            if self.budget.hard_limit_usd:
-                if self.total_spent >= self.budget.hard_limit_usd:
-                    self._halt_requested = True
-                    return CostStatus(
-                        should_halt=True,
-                        reason=f"Hard budget limit ${self.budget.hard_limit_usd:.2f} reached",
-                        total_spent=self.total_spent
-                    )
+            # Statistical significance test (binomial test)
+            p_value = self._binomial_test(gemini_wins, n)
 
-            # Check soft limit for alert
-            if self.budget.soft_limit_usd and not self._alert_issued:
-                alert_threshold = self.budget.soft_limit_usd * (self.budget.alert_at_percent / 100)
-                if self.total_spent >= alert_threshold:
-                    self._alert_issued = True
-                    return CostStatus(
-                        should_halt=False,
-                        alert=f"Approaching budget limit: ${self.total_spent:.2f} of ${self.budget.soft_limit_usd:.2f}",
-                        total_spent=self.total_spent
-                    )
-
-            return CostStatus(should_halt=False, total_spent=self.total_spent)
-
-    @property
-    def should_halt(self) -> bool:
-        return self._halt_requested
-
-    def get_summary(self) -> dict:
-        return {
-            "total_spent_usd": self.total_spent,
-            "response_generation_usd": self.response_generation_cost,
-            "judging_usd": self.judging_cost,
-            "budget_remaining_usd": (
-                self.budget.hard_limit_usd - self.total_spent
-                if self.budget.hard_limit_usd else None
+            results[pair_key] = WinRateResult(
+                pair_key=pair_key,
+                total_comparisons=n,
+                gemini_wins=gemini_wins,
+                competitor_wins=competitor_wins,
+                ties=ties,
+                win_rate=win_rate,
+                ci_lower=ci_lower,
+                ci_upper=ci_upper,
+                # Effect sizes
+                odds_ratio=odds_ratio,
+                odds_ratio_ci=self._odds_ratio_ci(gemini_wins, competitor_wins),
+                cohens_h=cohens_h,
+                # Significance
+                p_value=p_value,
+                significant_at_05=p_value < 0.05,
+                significant_at_01=p_value < 0.01
             )
+
+        return results
+
+    def _compute_odds_ratio(self, wins_a: int, wins_b: int) -> float:
+        """Compute odds ratio: (wins_a / wins_b)"""
+        # Add 0.5 to avoid division by zero (Haldane-Anscombe correction)
+        return (wins_a + 0.5) / (wins_b + 0.5)
+
+    def _compute_cohens_h(self, proportion: float, baseline: float = 0.5) -> float:
+        """Cohen's h effect size for comparing proportions"""
+        import math
+        phi1 = 2 * math.asin(math.sqrt(proportion))
+        phi2 = 2 * math.asin(math.sqrt(baseline))
+        return phi1 - phi2
+
+    def _binomial_test(self, successes: int, n: int, p: float = 0.5) -> float:
+        """Two-sided binomial test against null hypothesis of 50% win rate"""
+        from scipy.stats import binomtest
+        result = binomtest(successes, n, p, alternative='two-sided')
+        return result.pvalue
+
+    def _odds_ratio_ci(
+        self,
+        wins_a: int,
+        wins_b: int,
+        confidence: float = 0.95
+    ) -> tuple[float, float]:
+        """Confidence interval for odds ratio using log transform"""
+        import math
+        from scipy.stats import norm
+
+        # Haldane-Anscombe correction
+        a = wins_a + 0.5
+        b = wins_b + 0.5
+
+        log_or = math.log(a / b)
+        se_log_or = math.sqrt(1/a + 1/b)
+
+        z = norm.ppf(1 - (1 - confidence) / 2)
+
+        ci_lower = math.exp(log_or - z * se_log_or)
+        ci_upper = math.exp(log_or + z * se_log_or)
+
+        return (ci_lower, ci_upper)
+
+    async def compute_win_rates_by_all_dimensions(self) -> DimensionalAnalysis:
+        """Compute win rates broken down by ALL required dimensions"""
+
+        dimensions = {
+            "occupation": "onet_soc_code",
+            "soc_major_group": "soc_major_group",
+            "industry": "company_json->>'industry_naics'",
+            "job_zone": "job_zone",
+            "formality_level": "formality_level",
+            "writing_category": "writing_category",
+            "sensitive_category": "sensitive_category",
+            "channel": "channel",
+            "audience_size": "audience_size",
+            "emotional_context": "emotional_context",
+            "message_position": "message_position",
+            "urgency_level": "urgency_level",
+            "relationship_context": "relationship_context",
+            "writer_generation": "writer_json->>'generation'",
+            "writer_age_range": "writer_json->>'age_range'",
+            "recipient_english_variant": "recipient_english_variant",
+            "is_revision_task": "is_revision_task",
+            "deliberate_ambiguity": "deliberate_ambiguity",
         }
 
-@dataclass
-class CostStatus:
-    should_halt: bool
-    total_spent: float
-    reason: str | None = None
-    alert: str | None = None
+        results = {}
+        for dim_name, db_field in dimensions.items():
+            results[dim_name] = await self._win_rates_by_dimension(db_field)
+
+        return DimensionalAnalysis(
+            dimensions=results,
+            timestamp=datetime.utcnow()
+        )
+
+    async def _win_rates_by_dimension(self, dimension_field: str) -> dict[str, WinRateResult]:
+        """Compute win rates grouped by a specific dimension"""
+
+        query = f"""
+            SELECT
+                {dimension_field} as dimension_value,
+                SUM(CASE WHEN c.final_winner = 'gemini' THEN 1 ELSE 0 END) as gemini_wins,
+                SUM(CASE WHEN c.final_winner = 'competitor' THEN 1 ELSE 0 END) as competitor_wins,
+                SUM(CASE WHEN c.final_winner = 'tie' THEN 1 ELSE 0 END) as ties,
+                COUNT(*) as total
+            FROM comparisons c
+            JOIN prompts p ON c.prompt_id = p.prompt_id
+            GROUP BY {dimension_field}
+            HAVING total >= 5  -- Minimum sample size
+        """
+
+        rows = await self.storage.fetch_all(query)
+
+        results = {}
+        for row in rows:
+            dim_value = row['dimension_value'] or "unspecified"
+            n = row['total']
+            gemini_wins = row['gemini_wins']
+
+            win_rate = gemini_wins / n if n > 0 else 0
+            ci_lower, ci_upper = self._wilson_ci(gemini_wins, n)
+
+            results[dim_value] = WinRateResult(
+                total_comparisons=n,
+                gemini_wins=gemini_wins,
+                competitor_wins=row['competitor_wins'],
+                ties=row['ties'],
+                win_rate=win_rate,
+                ci_lower=ci_lower,
+                ci_upper=ci_upper,
+                odds_ratio=self._compute_odds_ratio(gemini_wins, row['competitor_wins']),
+                cohens_h=self._compute_cohens_h(win_rate)
+            )
+
+        return results
 ```
 
----
-
-## 8. Sensitive Topic Classification (NEW)
-
-Proactive detection during prompt generation, not just reactive handling of refusals:
+### 2.9 Time Estimation Implementation
 
 ```python
-# data/sensitive_topics.py
+class TimeEstimator:
+    """Estimate evaluation run time based on rate limits and parallelization"""
 
-"""
-Sensitive topic classification for writing prompts.
-
-Identifies prompts involving sensitive workplace situations that:
-1. May trigger model refusals
-2. Should be tracked separately in analysis
-3. Require careful handling
-"""
-
-from enum import Enum
-from dataclasses import dataclass
-import re
-
-class SensitiveCategory(Enum):
-    HR_PERFORMANCE = "hr_performance"        # Performance issues, PIPs
-    HR_TERMINATION = "hr_termination"        # Firing, layoffs
-    HR_COMPLAINT = "hr_complaint"            # Harassment, discrimination
-    LEGAL_CONTRACT = "legal_contract"        # Contract disputes
-    LEGAL_LIABILITY = "legal_liability"      # Legal risk, liability
-    LEGAL_COMPLIANCE = "legal_compliance"    # Regulatory compliance
-    BAD_NEWS = "bad_news"                    # Project cancellation, rejection
-    CONFIDENTIAL = "confidential"            # Financial results, M&A
-    CONFLICT = "conflict"                    # Disputes, negotiations
-    HEALTH_MEDICAL = "health_medical"        # Medical information
-    NONE = "none"
-
-@dataclass
-class SensitivityAnalysis:
-    is_sensitive: bool
-    categories: list[SensitiveCategory]
-    confidence: float
-    reasoning: str
-
-class SensitiveTopicClassifier:
-    """
-    Classify prompts for sensitive topics.
-
-    Uses pattern matching for efficiency, with optional LLM verification
-    for ambiguous cases.
-    """
-
-    PATTERNS = {
-        SensitiveCategory.HR_PERFORMANCE: [
-            r'\bperformance\s+(review|improvement|issue|problem)\b',
-            r'\bPIP\b',
-            r'\bunderperform',
-            r'\b(written|verbal)\s+warning\b',
-            r'\bfailing\s+to\s+meet\b',
-            r'\bpoor\s+performance\b',
-        ],
-        SensitiveCategory.HR_TERMINATION: [
-            r'\b(terminat|fire|dismiss|let\s+go|layoff|laid\s+off)\b',
-            r'\bseverance\b',
-            r'\bend\s+(of\s+)?employment\b',
-            r'\breduction\s+in\s+force\b',
-            r'\bRIF\b',
-        ],
-        SensitiveCategory.HR_COMPLAINT: [
-            r'\b(harass|discriminat|hostile\s+work)\b',
-            r'\bEEO\b',
-            r'\b(sexual|racial|age)\s+(harass|discriminat)\b',
-            r'\bwhistleblow',
-            r'\bretaliat',
-        ],
-        SensitiveCategory.LEGAL_CONTRACT: [
-            r'\bbreach\s+of\s+contract\b',
-            r'\bcontract\s+dispute\b',
-            r'\bnon-?compete\b',
-            r'\bNDA\s+violation\b',
-        ],
-        SensitiveCategory.LEGAL_LIABILITY: [
-            r'\bliab(le|ility)\b',
-            r'\blitigat',
-            r'\blawsuit\b',
-            r'\blegal\s+action\b',
-            r'\bdefamation\b',
-        ],
-        SensitiveCategory.LEGAL_COMPLIANCE: [
-            r'\b(compliance|regulatory)\s+(violation|issue|breach)\b',
-            r'\baudit\s+finding\b',
-            r'\bSOX\b',
-            r'\bHIPAA\b',
-            r'\bGDPR\b',
-        ],
-        SensitiveCategory.BAD_NEWS: [
-            r'\bcancel(led|ing)?\s+(project|contract|deal)\b',
-            r'\breject(ed|ing)?\s+(proposal|application|candidate)\b',
-            r'\bdeny\s+(request|application)\b',
-            r'\bbad\s+news\b',
-            r'\bunfortunately\b.*\b(cannot|unable|regret)\b',
-        ],
-        SensitiveCategory.CONFIDENTIAL: [
-            r'\bconfidential\b',
-            r'\bM&A\b',
-            r'\bmerger\b',
-            r'\bacquisition\b',
-            r'\bpre-?announcement\b',
-            r'\bearnings\b.*\b(unreleased|embargo)\b',
-            r'\binsider\b',
-        ],
-        SensitiveCategory.CONFLICT: [
-            r'\bdispute\b',
-            r'\bconflict\s+(with|between)\b',
-            r'\bgrievance\b',
-            r'\bescalat',
-            r'\bconfrontation\b',
-        ],
-        SensitiveCategory.HEALTH_MEDICAL: [
-            r'\bmedical\s+(condition|leave|information)\b',
-            r'\bFMLA\b',
-            r'\bdisability\b',
-            r'\bmental\s+health\b',
-            r'\bpregnancy\b',
-        ],
+    # API rate limits (requests per minute) - conservative estimates
+    RATE_LIMITS = {
+        "openai": 60,
+        "anthropic": 50,
+        "google": 60,
+        "x-ai": 30,
+        "moonshot": 30
     }
 
-    def __init__(self):
-        # Compile patterns for efficiency
-        self._compiled_patterns = {
-            category: [re.compile(pattern, re.IGNORECASE) for pattern in patterns]
-            for category, patterns in self.PATTERNS.items()
-        }
+    # Average response times (seconds)
+    AVG_RESPONSE_TIMES = {
+        "openai/gpt-5.2-thinking": 5.0,
+        "openai/gpt-4.1": 2.0,
+        "anthropic/claude-opus-4.5": 4.0,
+        "anthropic/claude-sonnet": 2.0,
+        "google/gemini-3-pro": 3.0,
+        "google/gemini-3-flash": 1.5,
+        "x-ai/grok-4.1-thinking": 4.0,
+        "moonshot/kimi-k2-thinking": 4.0
+    }
 
-    def classify(self, prompt_text: str, task_statement: str = "") -> SensitivityAnalysis:
-        """
-        Classify a prompt for sensitive topics.
+    def estimate_time(self, config: EvalConfig) -> TimeEstimate:
+        """Estimate total time for evaluation run"""
 
-        Checks both the generated prompt and the original task statement.
-        """
-        full_text = f"{prompt_text} {task_statement}"
+        # Phase 1: Response generation time
+        generation_time = self._estimate_generation_time(config)
 
-        matched_categories = []
-        for category, patterns in self._compiled_patterns.items():
-            for pattern in patterns:
-                if pattern.search(full_text):
-                    matched_categories.append(category)
-                    break  # One match per category is enough
+        # Phase 2: Judging time
+        judging_time = self._estimate_judging_time(config)
 
-        if matched_categories:
-            return SensitivityAnalysis(
-                is_sensitive=True,
-                categories=matched_categories,
-                confidence=0.8 if len(matched_categories) > 1 else 0.6,
-                reasoning=f"Matched patterns for: {[c.value for c in matched_categories]}"
+        # Total with overhead
+        total_sequential = generation_time + judging_time
+        total_parallel = self._estimate_parallel_time(config)
+
+        return TimeEstimate(
+            generation_time_minutes=generation_time / 60,
+            judging_time_minutes=judging_time / 60,
+            total_sequential_minutes=total_sequential / 60,
+            total_parallel_minutes=total_parallel / 60,
+            bottleneck=self._identify_bottleneck(config),
+            rate_limit_warnings=self._check_rate_limit_warnings(config)
+        )
+
+    def _estimate_generation_time(self, config: EvalConfig) -> float:
+        """Estimate time for response generation phase"""
+        total_seconds = 0
+
+        for model_pair in config.model_pairs:
+            # Time for Gemini responses
+            gemini_provider = self._get_provider(model_pair.gemini)
+            gemini_rate = self.RATE_LIMITS[gemini_provider]
+            gemini_response_time = self.AVG_RESPONSE_TIMES.get(model_pair.gemini, 3.0)
+
+            # Time for competitor responses
+            competitor_provider = self._get_provider(model_pair.competitor)
+            competitor_rate = self.RATE_LIMITS[competitor_provider]
+            competitor_response_time = self.AVG_RESPONSE_TIMES.get(model_pair.competitor, 3.0)
+
+            # Sequential time (rate-limited)
+            time_per_prompt = max(
+                60 / gemini_rate,  # Rate limit delay
+                gemini_response_time
+            ) + max(
+                60 / competitor_rate,
+                competitor_response_time
             )
 
-        return SensitivityAnalysis(
-            is_sensitive=False,
-            categories=[SensitiveCategory.NONE],
-            confidence=0.7,
-            reasoning="No sensitive patterns detected"
+            total_seconds += time_per_prompt * config.num_prompts
+
+        return total_seconds
+
+    def _estimate_judging_time(self, config: EvalConfig) -> float:
+        """Estimate time for judging phase"""
+        total_seconds = 0
+
+        # Total judge calls per comparison
+        calls_per_comparison = (
+            len(config.judge_models) *
+            config.votes_per_judge *
+            len(config.judge_personas)
         )
 
-    async def verify_with_llm(self,
-                               prompt_text: str,
-                               api_client,
-                               preliminary: SensitivityAnalysis) -> SensitivityAnalysis:
-        """
-        Optional LLM verification for ambiguous cases.
+        total_comparisons = config.num_prompts * len(config.model_pairs)
+        total_judge_calls = total_comparisons * calls_per_comparison
 
-        Only call this for edge cases where pattern matching is uncertain.
-        """
-        if preliminary.confidence > 0.75:
-            return preliminary
-
-        # Use fast model for classification
-        response = await api_client.complete(
-            model="gemini-3-flash",
-            prompt=f"""Classify this writing prompt for sensitive workplace topics.
-
-Prompt:
-{prompt_text}
-
-Is this about: HR issues (performance, termination, complaints), legal matters,
-bad news delivery, confidential information, workplace conflict, or health/medical?
-
-Reply with a JSON object: {{"is_sensitive": bool, "categories": ["category1", ...], "reasoning": "brief explanation"}}"""
+        # Estimate based on slowest judge rate
+        slowest_rate = min(
+            self.RATE_LIMITS[self._get_provider(j)]
+            for j in config.judge_models
         )
 
-        # Parse response and merge with pattern results
-        # ...
-        pass
+        # Time = calls / rate (calls per minute)
+        total_seconds = (total_judge_calls / slowest_rate) * 60
+
+        return total_seconds
+
+    def _estimate_parallel_time(self, config: EvalConfig) -> float:
+        """Estimate time with maximum parallelization"""
+        # With parallelization, we're limited by:
+        # 1. Per-provider rate limits (can parallelize across providers)
+        # 2. Per-call response time
+
+        generation_parallel = self._parallel_generation_time(config)
+        judging_parallel = self._parallel_judging_time(config)
+
+        return generation_parallel + judging_parallel
+
+    def _parallel_generation_time(self, config: EvalConfig) -> float:
+        """Generation time with parallel execution across providers"""
+        # Group model pairs by provider
+        by_provider = defaultdict(list)
+        for pair in config.model_pairs:
+            by_provider[self._get_provider(pair.gemini)].append(pair)
+            by_provider[self._get_provider(pair.competitor)].append(pair)
+
+        # Find bottleneck provider
+        max_time = 0
+        for provider, pairs in by_provider.items():
+            provider_calls = len(pairs) * config.num_prompts
+            provider_rate = self.RATE_LIMITS[provider]
+            provider_time = (provider_calls / provider_rate) * 60
+            max_time = max(max_time, provider_time)
+
+        return max_time
+
+    def _get_provider(self, model: str) -> str:
+        """Extract provider from model ID"""
+        return model.split("/")[0]
+
+    def _identify_bottleneck(self, config: EvalConfig) -> str:
+        """Identify what's limiting the evaluation speed"""
+        # Check if any provider is significantly slower
+        provider_loads = defaultdict(int)
+        for pair in config.model_pairs:
+            provider_loads[self._get_provider(pair.gemini)] += config.num_prompts
+            provider_loads[self._get_provider(pair.competitor)] += config.num_prompts
+
+        # Add judge calls
+        total_judge_calls = (
+            config.num_prompts *
+            len(config.model_pairs) *
+            len(config.judge_models) *
+            config.votes_per_judge *
+            len(config.judge_personas)
+        )
+
+        for judge in config.judge_models:
+            provider = self._get_provider(judge)
+            provider_loads[provider] += total_judge_calls // len(config.judge_models)
+
+        # Find highest load relative to rate limit
+        bottleneck = max(
+            provider_loads.keys(),
+            key=lambda p: provider_loads[p] / self.RATE_LIMITS[p]
+        )
+
+        return f"{bottleneck} ({provider_loads[bottleneck]} calls, {self.RATE_LIMITS[bottleneck]} RPM limit)"
 ```
 
----
-
-## 9. Connection Pool and Circuit Breaker (NEW)
-
-Proper management of concurrent API connections:
+### 2.10 Position Bias Analysis with Gemini Context
 
 ```python
-# api/connection_pool.py
+class PositionBiasAnalyzer:
+    """Analyze position bias with Gemini-specific context"""
 
-"""
-Connection pool management for OpenRouter API.
+    async def analyze_position_bias(self, storage: StorageManager) -> PositionBiasResult:
+        """Comprehensive position bias analysis"""
 
-Manages:
-1. Maximum concurrent connections
-2. Connection reuse
-3. Health monitoring
-"""
+        judgments = await storage.fetch_all("""
+            SELECT
+                winner,
+                position_a_was_gemini,
+                winner_model,
+                judge_model
+            FROM judgments
+        """)
 
-import asyncio
-from dataclasses import dataclass
-from collections import deque
-import httpx
+        # Overall A vs B preference
+        a_wins = sum(1 for j in judgments if j['winner'] == 'A')
+        b_wins = sum(1 for j in judgments if j['winner'] == 'B')
+        ties = sum(1 for j in judgments if j['winner'] == 'tie')
+        total = len(judgments)
 
-@dataclass
-class ConnectionPoolConfig:
-    max_connections: int = 10
-    max_connections_per_host: int = 10
-    connection_timeout: float = 30.0
-    read_timeout: float = 120.0
-    keepalive_expiry: float = 30.0
-
-class ConnectionPool:
-    """
-    Manages a pool of HTTP connections to OpenRouter.
-
-    Uses httpx connection pooling with semaphore-based concurrency control.
-    """
-
-    def __init__(self, config: ConnectionPoolConfig):
-        self.config = config
-        self._semaphore = asyncio.Semaphore(config.max_connections)
-        self._client: httpx.AsyncClient | None = None
-
-    async def initialize(self, api_key: str):
-        """Initialize the connection pool."""
-        self._client = httpx.AsyncClient(
-            base_url="https://openrouter.ai/api/v1",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "HTTP-Referer": "gemini-writing-eval",
-                "X-Title": "Gemini Writing Evaluation Framework",
-            },
-            timeout=httpx.Timeout(
-                connect=self.config.connection_timeout,
-                read=self.config.read_timeout,
-                write=30.0,
-                pool=30.0
-            ),
-            limits=httpx.Limits(
-                max_connections=self.config.max_connections,
-                max_keepalive_connections=self.config.max_connections_per_host,
-                keepalive_expiry=self.config.keepalive_expiry
-            )
+        # Gemini win rate when in position A vs position B
+        gemini_wins_as_a = sum(
+            1 for j in judgments
+            if j['position_a_was_gemini'] and j['winner'] == 'A'
+        )
+        gemini_total_as_a = sum(
+            1 for j in judgments if j['position_a_was_gemini']
         )
 
-    async def request(self, method: str, path: str, **kwargs):
-        """Make a request with connection pool management."""
-        async with self._semaphore:
-            return await self._client.request(method, path, **kwargs)
-
-    async def close(self):
-        """Close all connections."""
-        if self._client:
-            await self._client.aclose()
-
-
-# api/circuit_breaker.py
-
-"""
-Circuit breaker for API failure handling.
-
-Prevents cascading failures by temporarily stopping requests
-when error rates are too high.
-"""
-
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from enum import Enum
-import asyncio
-
-class CircuitState(Enum):
-    CLOSED = "closed"        # Normal operation
-    OPEN = "open"            # Blocking requests
-    HALF_OPEN = "half_open"  # Testing if service recovered
-
-@dataclass
-class CircuitBreakerConfig:
-    failure_threshold: int = 5      # Failures before opening
-    success_threshold: int = 3      # Successes to close from half-open
-    timeout_seconds: float = 60.0   # Time before trying half-open
-    window_seconds: float = 60.0    # Window for counting failures
-
-class CircuitBreaker:
-    """
-    Circuit breaker implementation for API resilience.
-
-    States:
-    - CLOSED: Normal operation, requests pass through
-    - OPEN: Service is failing, reject all requests immediately
-    - HALF_OPEN: Testing if service recovered, allow limited requests
-    """
-
-    def __init__(self, name: str, config: CircuitBreakerConfig):
-        self.name = name
-        self.config = config
-        self.state = CircuitState.CLOSED
-        self._failure_count = 0
-        self._success_count = 0
-        self._last_failure_time: datetime | None = None
-        self._opened_at: datetime | None = None
-        self._lock = asyncio.Lock()
-
-    async def call(self, func, *args, **kwargs):
-        """
-        Execute function through circuit breaker.
-
-        Raises CircuitOpenError if circuit is open.
-        """
-        async with self._lock:
-            if self.state == CircuitState.OPEN:
-                if self._should_attempt_reset():
-                    self.state = CircuitState.HALF_OPEN
-                    self._success_count = 0
-                else:
-                    raise CircuitOpenError(
-                        f"Circuit {self.name} is open, retry after "
-                        f"{self._time_until_retry():.1f}s"
-                    )
-
-        try:
-            result = await func(*args, **kwargs)
-            await self._on_success()
-            return result
-        except Exception as e:
-            await self._on_failure(e)
-            raise
-
-    async def _on_success(self):
-        async with self._lock:
-            if self.state == CircuitState.HALF_OPEN:
-                self._success_count += 1
-                if self._success_count >= self.config.success_threshold:
-                    self.state = CircuitState.CLOSED
-                    self._failure_count = 0
-            elif self.state == CircuitState.CLOSED:
-                # Reset failure count on success
-                self._failure_count = max(0, self._failure_count - 1)
-
-    async def _on_failure(self, error: Exception):
-        async with self._lock:
-            self._failure_count += 1
-            self._last_failure_time = datetime.now()
-
-            if self.state == CircuitState.HALF_OPEN:
-                # Any failure in half-open goes back to open
-                self.state = CircuitState.OPEN
-                self._opened_at = datetime.now()
-            elif self.state == CircuitState.CLOSED:
-                if self._failure_count >= self.config.failure_threshold:
-                    self.state = CircuitState.OPEN
-                    self._opened_at = datetime.now()
-
-    def _should_attempt_reset(self) -> bool:
-        if not self._opened_at:
-            return True
-        elapsed = (datetime.now() - self._opened_at).total_seconds()
-        return elapsed >= self.config.timeout_seconds
-
-    def _time_until_retry(self) -> float:
-        if not self._opened_at:
-            return 0
-        elapsed = (datetime.now() - self._opened_at).total_seconds()
-        return max(0, self.config.timeout_seconds - elapsed)
-
-class CircuitOpenError(Exception):
-    """Raised when circuit breaker is open."""
-    pass
-```
-
----
-
-## 10. Temporal Context Generation (IMPROVED)
-
-Consistent date/deadline generation:
-
-```python
-# prompts/temporal.py
-
-"""
-Temporal context generation for writing prompts.
-
-Generates realistic dates, deadlines, and time-sensitive context
-that is consistent with the evaluation date.
-"""
-
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from enum import Enum
-import random
-
-class TemporalRelevance(Enum):
-    NONE = "none"                    # No temporal context needed
-    DATE_AWARE = "date_aware"        # Just needs current date
-    DEADLINE_DRIVEN = "deadline"     # Has specific deadline
-    EVENT_REFERENCED = "event"       # References recent/upcoming event
-    QUARTERLY = "quarterly"          # Quarter-end related
-    ANNUAL = "annual"                # Year-end related
-
-@dataclass
-class TemporalContext:
-    relevance: TemporalRelevance
-    current_date: datetime
-    deadline: datetime | None = None
-    deadline_description: str | None = None
-    recent_event: str | None = None
-    upcoming_event: str | None = None
-    quarter: str | None = None  # "Q1 2026"
-    fiscal_context: str | None = None
-
-class TemporalContextGenerator:
-    """
-    Generate realistic temporal context for prompts.
-
-    Uses the evaluation date as the reference point to ensure
-    all generated dates are plausible.
-    """
-
-    def __init__(self, evaluation_date: datetime):
-        self.eval_date = evaluation_date
-
-    def generate(self,
-                 task_statement: str,
-                 urgency_level: str,
-                 rng) -> TemporalContext:
-        """
-        Generate appropriate temporal context based on task and urgency.
-        """
-        relevance = self._determine_relevance(task_statement, urgency_level)
-
-        if relevance == TemporalRelevance.NONE:
-            return TemporalContext(
-                relevance=relevance,
-                current_date=self.eval_date
-            )
-
-        context = TemporalContext(
-            relevance=relevance,
-            current_date=self.eval_date,
-            quarter=self._get_quarter_string()
+        gemini_wins_as_b = sum(
+            1 for j in judgments
+            if not j['position_a_was_gemini'] and j['winner'] == 'B'
+        )
+        gemini_total_as_b = sum(
+            1 for j in judgments if not j['position_a_was_gemini']
         )
 
-        if relevance == TemporalRelevance.DEADLINE_DRIVEN:
-            context.deadline, context.deadline_description = self._generate_deadline(
-                urgency_level, rng
-            )
+        gemini_win_rate_as_a = gemini_wins_as_a / gemini_total_as_a if gemini_total_as_a > 0 else 0
+        gemini_win_rate_as_b = gemini_wins_as_b / gemini_total_as_b if gemini_total_as_b > 0 else 0
 
-        if relevance == TemporalRelevance.EVENT_REFERENCED:
-            context.recent_event, context.upcoming_event = self._generate_events(
-                task_statement, rng
-            )
+        # Chi-squared test for position bias
+        from scipy.stats import chisquare, chi2_contingency
 
-        if relevance in [TemporalRelevance.QUARTERLY, TemporalRelevance.ANNUAL]:
-            context.fiscal_context = self._generate_fiscal_context(relevance)
+        # Test 1: Overall A vs B preference
+        expected = (a_wins + b_wins) / 2
+        chi2_overall, p_overall = chisquare([a_wins, b_wins], [expected, expected])
 
-        return context
-
-    def _determine_relevance(self, task: str, urgency: str) -> TemporalRelevance:
-        """Determine what type of temporal context is appropriate."""
-        task_lower = task.lower()
-
-        # Quarterly/annual patterns
-        if any(word in task_lower for word in ['quarterly', 'q1', 'q2', 'q3', 'q4']):
-            return TemporalRelevance.QUARTERLY
-        if any(word in task_lower for word in ['annual', 'year-end', 'fiscal year']):
-            return TemporalRelevance.ANNUAL
-
-        # Deadline patterns
-        if any(word in task_lower for word in ['deadline', 'due', 'by friday', 'urgent']):
-            return TemporalRelevance.DEADLINE_DRIVEN
-        if urgency in ['urgent', 'critical']:
-            return TemporalRelevance.DEADLINE_DRIVEN
-
-        # Event patterns
-        if any(word in task_lower for word in ['meeting', 'conference', 'presentation']):
-            return TemporalRelevance.EVENT_REFERENCED
-        if 'following' in task_lower or 'after' in task_lower:
-            return TemporalRelevance.EVENT_REFERENCED
-
-        # Some tasks just need date awareness
-        if any(word in task_lower for word in ['schedule', 'plan', 'upcoming']):
-            return TemporalRelevance.DATE_AWARE
-
-        return TemporalRelevance.NONE
-
-    def _generate_deadline(self, urgency: str, rng) -> tuple[datetime, str]:
-        """Generate a realistic deadline based on urgency."""
-        if urgency == 'critical':
-            days = rng.choice([0, 1])  # Today or tomorrow
-            descriptions = ["end of day today", "tomorrow morning", "by close of business"]
-        elif urgency == 'urgent':
-            days = rng.choice([1, 2, 3])
-            descriptions = ["by Friday", "this week", "in the next few days"]
-        elif urgency == 'important':
-            days = rng.choice([5, 7, 10, 14])
-            descriptions = ["next week", "by the 15th", "within two weeks"]
-        else:
-            days = rng.choice([14, 21, 30])
-            descriptions = ["by end of month", "in the next few weeks", "by the 1st"]
-
-        deadline = self.eval_date + timedelta(days=days)
-        description = rng.choice(descriptions)
-
-        return deadline, description
-
-    def _generate_events(self, task: str, rng) -> tuple[str | None, str | None]:
-        """Generate recent and upcoming events for context."""
-        recent_events = [
-            "last week's team meeting",
-            "the quarterly review",
-            "yesterday's client call",
-            "the recent announcement",
-            "our conversation earlier this week",
-            "the project kickoff",
+        # Test 2: Gemini win rate by position (2x2 contingency)
+        contingency_table = [
+            [gemini_wins_as_a, gemini_total_as_a - gemini_wins_as_a],
+            [gemini_wins_as_b, gemini_total_as_b - gemini_wins_as_b]
         ]
+        chi2_gemini, p_gemini, dof, expected_freq = chi2_contingency(contingency_table)
 
-        upcoming_events = [
-            "the board meeting on Friday",
-            "next week's conference",
-            "the upcoming product launch",
-            "tomorrow's presentation",
-            "the client visit next month",
-        ]
+        # Per-judge analysis
+        by_judge = defaultdict(lambda: {"a_wins": 0, "b_wins": 0, "total": 0})
+        for j in judgments:
+            judge = j['judge_model']
+            by_judge[judge]["total"] += 1
+            if j['winner'] == 'A':
+                by_judge[judge]["a_wins"] += 1
+            elif j['winner'] == 'B':
+                by_judge[judge]["b_wins"] += 1
 
-        recent = rng.choice(recent_events) if rng.random() > 0.3 else None
-        upcoming = rng.choice(upcoming_events) if rng.random() > 0.3 else None
+        judge_biases = {}
+        for judge, counts in by_judge.items():
+            a_rate = counts["a_wins"] / counts["total"] if counts["total"] > 0 else 0
+            judge_biases[judge] = {
+                "a_win_rate": a_rate,
+                "b_win_rate": counts["b_wins"] / counts["total"] if counts["total"] > 0 else 0,
+                "preference": "A" if a_rate > 0.55 else ("B" if a_rate < 0.45 else "neutral")
+            }
 
-        return recent, upcoming
+        return PositionBiasResult(
+            # Overall position bias
+            overall_a_win_rate=a_wins / (a_wins + b_wins) if (a_wins + b_wins) > 0 else 0,
+            overall_b_win_rate=b_wins / (a_wins + b_wins) if (a_wins + b_wins) > 0 else 0,
+            overall_chi_squared=chi2_overall,
+            overall_p_value=p_overall,
+            overall_significant=p_overall < 0.05,
 
-    def _get_quarter_string(self) -> str:
-        """Get current quarter string."""
-        quarter = (self.eval_date.month - 1) // 3 + 1
-        return f"Q{quarter} {self.eval_date.year}"
+            # Gemini-specific position bias
+            gemini_win_rate_as_a=gemini_win_rate_as_a,
+            gemini_win_rate_as_b=gemini_win_rate_as_b,
+            gemini_position_chi_squared=chi2_gemini,
+            gemini_position_p_value=p_gemini,
+            gemini_position_significant=p_gemini < 0.05,
 
-    def _generate_fiscal_context(self, relevance: TemporalRelevance) -> str:
-        """Generate fiscal/quarterly context."""
-        quarter = (self.eval_date.month - 1) // 3 + 1
-        year = self.eval_date.year
+            # Per-judge breakdown
+            per_judge_bias=judge_biases,
 
-        if relevance == TemporalRelevance.QUARTERLY:
-            return f"We're approaching the end of Q{quarter} {year}"
-        else:  # ANNUAL
-            return f"As we approach fiscal year-end {year}"
-
-    def format_for_prompt(self, context: TemporalContext) -> str:
-        """Format temporal context for inclusion in prompt."""
-        if context.relevance == TemporalRelevance.NONE:
-            return ""
-
-        parts = []
-
-        # Current date
-        date_str = context.current_date.strftime("%A, %B %d, %Y")
-        parts.append(f"Today is {date_str}.")
-
-        # Quarter context
-        if context.quarter and context.relevance in [
-            TemporalRelevance.QUARTERLY, TemporalRelevance.ANNUAL
-        ]:
-            parts.append(context.fiscal_context)
-
-        # Deadline
-        if context.deadline and context.deadline_description:
-            parts.append(f"This needs to be completed {context.deadline_description}.")
-
-        # Events
-        if context.recent_event:
-            parts.append(f"Following {context.recent_event},")
-        if context.upcoming_event:
-            parts.append(f"In preparation for {context.upcoming_event},")
-
-        return " ".join(parts)
-```
-
----
-
-## 11. Prompt Validation (NEW)
-
-Validate prompts before evaluation begins:
-
-```python
-# prompts/validation.py
-
-"""
-Prompt validation to ensure quality before evaluation.
-
-Validates:
-1. Prompt completeness (all required fields)
-2. Diversity requirements met
-3. No obvious issues that would cause failures
-"""
-
-from dataclasses import dataclass
-from collections import Counter
-
-@dataclass
-class ValidationResult:
-    is_valid: bool
-    errors: list[str]
-    warnings: list[str]
-    diversity_scores: dict[str, float]
-
-class PromptValidator:
-    """
-    Validate a set of prompts before evaluation.
-    """
-
-    REQUIRED_FIELDS = [
-        'prompt_id', 'onetsoc_code', 'occupation_title', 'naics_code',
-        'writer', 'recipients', 'generated_prompt_text'
-    ]
-
-    DIVERSITY_DIMENSIONS = [
-        'job_zone', 'soc_major_code', 'naics_code', 'formality_level',
-        'writer_generation', 'company_size', 'urgency_level', 'emotional_context'
-    ]
-
-    def validate_prompts(self, prompts: list) -> ValidationResult:
-        """Validate a complete set of prompts."""
-        errors = []
-        warnings = []
-        diversity_scores = {}
-
-        # Check completeness
-        for i, prompt in enumerate(prompts):
-            field_errors = self._check_required_fields(prompt, i)
-            errors.extend(field_errors)
-
-        # Check diversity
-        diversity_scores = self._compute_diversity_scores(prompts)
-
-        for dimension, score in diversity_scores.items():
-            if score < 0.3:
-                errors.append(f"Poor diversity on {dimension}: {score:.2f}")
-            elif score < 0.5:
-                warnings.append(f"Low diversity on {dimension}: {score:.2f}")
-
-        # Check for problematic patterns
-        pattern_warnings = self._check_patterns(prompts)
-        warnings.extend(pattern_warnings)
-
-        return ValidationResult(
-            is_valid=len(errors) == 0,
-            errors=errors,
-            warnings=warnings,
-            diversity_scores=diversity_scores
+            # Summary
+            position_bias_detected=(p_overall < 0.05 or p_gemini < 0.05),
+            recommendation=self._generate_recommendation(
+                p_overall, p_gemini, gemini_win_rate_as_a, gemini_win_rate_as_b
+            )
         )
 
-    def _check_required_fields(self, prompt, index: int) -> list[str]:
-        """Check that all required fields are present."""
-        errors = []
-        for field in self.REQUIRED_FIELDS:
-            if not hasattr(prompt, field) or getattr(prompt, field) is None:
-                errors.append(f"Prompt {index}: missing required field '{field}'")
-        return errors
-
-    def _compute_diversity_scores(self, prompts: list) -> dict[str, float]:
-        """
-        Compute diversity scores for each dimension.
-
-        Uses normalized entropy: 1.0 = perfectly uniform, 0.0 = all same value
-        """
-        import math
-
-        scores = {}
-
-        for dimension in self.DIVERSITY_DIMENSIONS:
-            values = [getattr(p, dimension, None) for p in prompts]
-            values = [v for v in values if v is not None]
-
-            if not values:
-                scores[dimension] = 0.0
-                continue
-
-            counter = Counter(values)
-            n = len(values)
-            k = len(counter)
-
-            if k == 1:
-                scores[dimension] = 0.0
+    def _generate_recommendation(
+        self,
+        p_overall: float,
+        p_gemini: float,
+        win_rate_a: float,
+        win_rate_b: float
+    ) -> str:
+        """Generate recommendation based on bias analysis"""
+        if p_overall < 0.05:
+            if win_rate_a > win_rate_b:
+                return "Significant position bias detected favoring position A. Consider weighting results."
             else:
-                # Normalized entropy
-                entropy = -sum((c/n) * math.log2(c/n) for c in counter.values())
-                max_entropy = math.log2(k)
-                scores[dimension] = entropy / max_entropy if max_entropy > 0 else 0
+                return "Significant position bias detected favoring position B. Consider weighting results."
 
-        return scores
+        if p_gemini < 0.05:
+            diff = abs(win_rate_a - win_rate_b)
+            if diff > 0.1:
+                return f"Gemini's win rate varies by position ({win_rate_a:.1%} as A, {win_rate_b:.1%} as B). Results may need adjustment."
 
-    def _check_patterns(self, prompts: list) -> list[str]:
-        """Check for problematic patterns in prompts."""
-        warnings = []
+        return "No significant position bias detected."
+```
 
-        # Check for duplicate prompts
-        prompt_texts = [p.generated_prompt_text for p in prompts]
-        if len(prompt_texts) != len(set(prompt_texts)):
-            warnings.append("Found duplicate prompt texts")
+### 2.11 Missing Components: Regional Variants and Multi-Recipient Analysis
 
-        # Check for very short prompts
-        short_prompts = sum(1 for p in prompts if len(p.generated_prompt_text) < 100)
-        if short_prompts > len(prompts) * 0.1:
-            warnings.append(f"{short_prompts} prompts are very short (<100 chars)")
+```python
+class RegionalVariantAnalyzer:
+    """Analyze model performance on regional English variants"""
 
-        # Check for very long prompts
-        long_prompts = sum(1 for p in prompts if len(p.generated_prompt_text) > 5000)
-        if long_prompts > len(prompts) * 0.1:
-            warnings.append(f"{long_prompts} prompts are very long (>5000 chars)")
+    async def analyze_regional_performance(
+        self,
+        storage: StorageManager
+    ) -> RegionalAnalysisResult:
+        """Analyze how models adapt to regional English contexts"""
 
-        return warnings
+        # Win rates by recipient English variant
+        variants = ["en-US", "en-GB", "en-AU", "non-native"]
+
+        results_by_variant = {}
+        for variant in variants:
+            comparisons = await storage.fetch_all("""
+                SELECT c.final_winner, c.gemini_model, c.competitor_model
+                FROM comparisons c
+                JOIN prompts p ON c.prompt_id = p.prompt_id
+                WHERE p.recipient_english_variant = ?
+            """, (variant,))
+
+            if len(comparisons) >= 10:
+                gemini_wins = sum(1 for c in comparisons if c['final_winner'] == 'gemini')
+                win_rate = gemini_wins / len(comparisons)
+                ci_lower, ci_upper = self._wilson_ci(gemini_wins, len(comparisons))
+
+                results_by_variant[variant] = RegionalWinRate(
+                    variant=variant,
+                    total=len(comparisons),
+                    gemini_wins=gemini_wins,
+                    win_rate=win_rate,
+                    ci_lower=ci_lower,
+                    ci_upper=ci_upper
+                )
+
+        # Cross-regional comparison
+        if len(results_by_variant) >= 2:
+            chi2, p_value = self._compare_variants(results_by_variant)
+        else:
+            chi2, p_value = None, None
+
+        return RegionalAnalysisResult(
+            by_variant=results_by_variant,
+            chi_squared=chi2,
+            p_value=p_value,
+            significant_difference=p_value < 0.05 if p_value else False,
+            best_variant=max(results_by_variant.keys(), key=lambda v: results_by_variant[v].win_rate) if results_by_variant else None,
+            worst_variant=min(results_by_variant.keys(), key=lambda v: results_by_variant[v].win_rate) if results_by_variant else None
+        )
+
+
+class MultiRecipientAnalyzer:
+    """Analyze performance on multi-recipient (CC) scenarios"""
+
+    async def analyze_cc_scenarios(
+        self,
+        storage: StorageManager
+    ) -> CCAnalysisResult:
+        """Analyze how models handle multiple-audience scenarios"""
+
+        # Prompts with CC recipients
+        cc_comparisons = await storage.fetch_all("""
+            SELECT c.*, p.cc_recipients_json
+            FROM comparisons c
+            JOIN prompts p ON c.prompt_id = p.prompt_id
+            WHERE p.cc_recipients_json IS NOT NULL
+            AND json_array_length(p.cc_recipients_json) > 0
+        """)
+
+        # Prompts without CC recipients
+        single_comparisons = await storage.fetch_all("""
+            SELECT c.*
+            FROM comparisons c
+            JOIN prompts p ON c.prompt_id = p.prompt_id
+            WHERE p.cc_recipients_json IS NULL
+            OR json_array_length(p.cc_recipients_json) = 0
+        """)
+
+        # Compare win rates
+        cc_gemini_wins = sum(1 for c in cc_comparisons if c['final_winner'] == 'gemini')
+        single_gemini_wins = sum(1 for c in single_comparisons if c['final_winner'] == 'gemini')
+
+        cc_win_rate = cc_gemini_wins / len(cc_comparisons) if cc_comparisons else 0
+        single_win_rate = single_gemini_wins / len(single_comparisons) if single_comparisons else 0
+
+        # Statistical comparison
+        from scipy.stats import chi2_contingency
+        contingency = [
+            [cc_gemini_wins, len(cc_comparisons) - cc_gemini_wins],
+            [single_gemini_wins, len(single_comparisons) - single_gemini_wins]
+        ]
+        chi2, p_value, _, _ = chi2_contingency(contingency) if cc_comparisons and single_comparisons else (None, None, None, None)
+
+        return CCAnalysisResult(
+            cc_total=len(cc_comparisons),
+            cc_win_rate=cc_win_rate,
+            single_total=len(single_comparisons),
+            single_win_rate=single_win_rate,
+            difference=cc_win_rate - single_win_rate,
+            chi_squared=chi2,
+            p_value=p_value,
+            significant=p_value < 0.05 if p_value else False,
+            interpretation=self._interpret_results(cc_win_rate, single_win_rate, p_value)
+        )
+
+    def _interpret_results(
+        self,
+        cc_rate: float,
+        single_rate: float,
+        p_value: float
+    ) -> str:
+        """Interpret CC analysis results"""
+        if p_value is None:
+            return "Insufficient data for analysis"
+
+        diff = cc_rate - single_rate
+
+        if p_value >= 0.05:
+            return "No significant difference between CC and single-recipient scenarios"
+
+        if diff > 0:
+            return f"Gemini performs better in CC scenarios (+{diff:.1%})"
+        else:
+            return f"Gemini performs worse in CC scenarios ({diff:.1%})"
+```
+
+### 2.12 Auto-Generated README and CSV Export
+
+```python
+class ResultsManager:
+    """Manages results directory with auto-generated documentation"""
+
+    def create_run_directory(self, config: EvalConfig) -> Path:
+        """Create a new timestamped run directory with auto-generated README"""
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        run_dir = self.base_dir / f"eval_{timestamp}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create subdirectories...
+        # (same as original)
+
+        # Auto-generate README
+        readme_content = self._generate_readme(config, timestamp)
+        (run_dir / "README.md").write_text(readme_content)
+
+        return run_dir
+
+    def _generate_readme(self, config: EvalConfig, timestamp: str) -> str:
+        """Generate README for the run directory"""
+        return f"""# Evaluation Run: {timestamp}
+
+## Configuration
+
+- **Preset**: {config.name}
+- **Prompts**: {config.num_prompts}
+- **Random Seed**: {config.random_seed}
+
+### Model Pairs
+
+| Gemini Model | Competitor |
+|--------------|------------|
+{self._format_model_pairs_table(config.model_pairs)}
+
+### Judge Configuration
+
+- **Judge Models**: {', '.join(config.judge_models)}
+- **Votes per Judge**: {config.votes_per_judge}
+- **Judge Personas**: {', '.join(config.judge_personas)}
+
+## Directory Structure
+
+```
+{self._format_directory_structure()}
+```
+
+## Files
+
+- `config.json`: Full configuration (machine-readable)
+- `config_summary.txt`: Human-readable configuration
+- `results.db`: SQLite database with all results
+- `results_summary.csv`: Quick CSV export of key metrics
+- `reports/report.pdf`: Final PDF report (after completion)
+
+## Resume
+
+To resume an interrupted run:
+
+```bash
+./eval resume {timestamp}
 ```
 
 ---
 
-## 12. Implementation Phases (IMPROVED)
+*Generated automatically by Gemini Writing Evaluation Framework*
+"""
 
-### Phase 1: Core Infrastructure (Week 1-2)
+    def export_to_csv(self, run_dir: Path) -> Path:
+        """Export results to CSV for easy analysis"""
+        storage = StorageManager(run_dir / "results.db")
 
-**Priority: Get a minimal working evaluation running**
+        # Export main comparison results
+        comparisons_path = run_dir / "results_summary.csv"
+        comparisons = asyncio.run(storage.fetch_all("""
+            SELECT
+                c.comparison_id,
+                c.prompt_id,
+                p.occupation_title,
+                p.job_zone,
+                p.writing_category,
+                p.formality_level,
+                p.channel,
+                p.audience_size,
+                c.gemini_model,
+                c.competitor_model,
+                c.final_winner,
+                c.judge_agreement_count,
+                c.gemini_auto_loss,
+                c.competitor_auto_loss
+            FROM comparisons c
+            JOIN prompts p ON c.prompt_id = p.prompt_id
+        """))
 
-1. **OpenRouter API client** with verified model IDs
-   - Connection pool with concurrency limits
-   - Retry with exponential backoff
-   - Circuit breaker for resilience
-   - Model verification at startup
+        import csv
+        with open(comparisons_path, 'w', newline='') as f:
+            if comparisons:
+                writer = csv.DictWriter(f, fieldnames=comparisons[0].keys())
+                writer.writeheader()
+                writer.writerows(comparisons)
 
-2. **SQLite database** with WAL mode
-   - Write coalescing for performance
-   - Complete schema with cost tracking
+        # Export detailed win rates
+        win_rates_path = run_dir / "win_rates_by_dimension.csv"
+        # (similar export for dimensional analysis)
 
-3. **Basic CLI** with preset support
-   - Cost estimation before run
-   - Dry-run mode
-
-4. **Checkpoint system**
-   - Save/resume functionality
-   - Graceful shutdown handling
-
-### Phase 2: Prompt Generation (Week 2-3)
-
-1. **O*NET extraction** with writing task classification
-2. **NAICS mapping** with embedded BLS data
-3. **Company database** with 500+ companies
-4. **Name generator** with demographic diversity
-5. **Temporal context** generation
-6. **Sensitive topic** classification
-7. **Prompt validation** before evaluation
-
-### Phase 3: Evaluation Pipeline (Week 3-4)
-
-1. **Response generation** with parallel execution
-2. **Dual-persona judging** implementation
-3. **Majority-of-majorities** aggregation
-4. **Position bias** mitigation
-5. **Failure categorization**
-6. **Budget enforcement**
-
-### Phase 4: Analysis & Reporting (Week 4-5)
-
-1. **Statistical analysis** with confidence intervals
-2. **Bias detection** (position, length, model)
-3. **Weakness identification**
-4. **PDF report generation**
-5. **Chart generation**
-
-### Phase 5: TUI & Polish (Week 5-6)
-
-1. **Progress dashboard** with real-time updates
-2. **Results viewer** with filtering
-3. **Error state handling**
-4. **Cross-run comparison**
+        return comparisons_path
+```
 
 ---
 
-## 13. Risk Mitigation (IMPROVED)
+## Part 3: Summary of Required Changes
 
-### Technical Risks
+### Critical Fixes (Must Address)
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| OpenRouter model names change | High | Verify at startup, fail fast with clear error |
-| Rate limits vary by model | Medium | Adaptive rate limiting, per-model limits |
-| API outages | High | Circuit breaker, automatic retry, checkpoint |
-| SQLite write contention | Medium | WAL mode, single writer, batch commits |
-| Token estimation inaccuracy | Medium | Calibration phase, conservative estimates |
-| Budget overrun | High | Hard limits, real-time cost tracking, alerts |
+1. **Remove hardcoded writing categories** - Use O*NET reference data instead
+2. **Implement Phase 1 of prompt generation** - Offline LLM template generation
+3. **Fix channel handling** - Don't force into predefined categories
+4. **Add Flash-tier model pairs** to all preset configurations
+5. **Fix vote aggregation** - Properly handle persona-level aggregation
+6. **Complete database schema** - Add missing fields for all dimensions
+7. **Implement effect size calculations** - Cohen's h and odds ratios
+8. **Add time estimation** - Calculate based on rate limits
 
-### Methodological Risks
+### Important Additions (Should Address)
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Prompt generation bias | High | Use ensemble of models, track which generated |
-| Judge model self-bias | High | Weight non-Gemini judges, detect/report bias |
-| Sensitive topic refusals | Medium | Proactive classification, separate tracking |
-| Uneven diversity | Medium | Validation before run, stratified sampling |
+1. **Instruction compliance checker** - Verify constraint following
+2. **Ambiguity behavior tracking** - Track model handling patterns
+3. **Position bias analysis with Gemini context** - Not just A/B preference
+4. **Regional variant analysis** - en-GB, en-AU, non-native performance
+5. **Multi-recipient (CC) analysis** - Performance on multi-audience scenarios
+6. **Auto-generated README** - For each run directory
+7. **CSV export functionality** - For easy external analysis
 
----
+### Recommended Improvements
 
-## 14. Success Criteria (IMPROVED)
-
-1. **Functional**: Complete end-to-end evaluation with preset 3 (50 prompts) succeeds
-2. **Robust**: System recovers from API failures, can resume after interruption
-3. **Trustworthy**: Statistical methodology verified, bias detection working
-4. **Usable**: Clear TUI, informative progress, actionable reports
-5. **Reproducible**: Same seed + config produces identical prompts
-6. **Cost-controlled**: Budget limits enforced, costs tracked accurately
+1. **More detailed recipient persona generation** - Context-specific evaluation
+2. **Cross-run comparison implementation** - Complete the stubbed command
+3. **Format bias detection with statistical tests**
+4. **Tone matching evaluation mechanism**
 
 ---
 
-## 15. Conclusion
-
-This improved plan addresses the critical gaps in Draft Plan 3:
-
-1. **Verified model identifiers** with startup verification
-2. **Embedded NAICS mapping** data
-3. **Comprehensive company database** structure
-4. **Proper dual-persona judging** per PROMPT.md
-5. **SQLite concurrency** handling
-6. **Budget enforcement** with hard stops
-7. **Sensitive topic classification** during generation
-8. **Connection pooling** and circuit breakers
-9. **Temporal context** generation
-10. **Prompt validation** before evaluation
-
-The plan is now more robust, complete, and implementable.
+*End of Critique for Draft Plan 3*

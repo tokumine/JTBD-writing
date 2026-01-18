@@ -1,926 +1,952 @@
-# Implementation Simulation Report #3
+# Simulation Report 3: Master Plan Implementation Dry Run
 
 ## Executive Summary
 
-This document provides a detailed dry-run simulation of implementing the Gemini Writing Evaluation Framework master plan. By walking through each component as if actually coding it, I've identified what works well, what doesn't work or is unclear, missing pieces, gotchas, and specific improvements needed.
+This document simulates implementing the master plan from `plans/master_plan_draft.md` for the Gemini Writing Evaluation Framework. I walked through each component as if building it, documenting what works well, what doesn't work or is unclear, identifying missing pieces, noting gotchas and edge cases, and flagging inconsistencies with PROMPT.md requirements.
+
+**Overall Assessment**: The master plan is comprehensive and well-structured, but several critical gaps and implementation challenges need resolution before production use.
 
 ---
 
-## Part 1: Project Setup and Foundation
+## 1. Phase 1 - Foundation Implementation Simulation
 
-### What Works Well
-- The directory structure is comprehensive and well-organized
-- Technology stack choices (pydantic, httpx, asyncio, textual) are modern and appropriate
-- The pyproject.toml dependencies are realistic and compatible
+### 1.1 O*NET Extractor Simulation
 
-### Issues Identified
+**Walking through the implementation:**
 
-#### Issue 1.1: Missing Python Version Constraint
-**Problem**: The plan specifies `requires-python = ">=3.11"` but doesn't explain why 3.11 specifically.
-**Impact**: Low - but documentation should note that 3.11 is needed for `typing.Self`, improved `asyncio.TaskGroup`, and better error messages.
-**Recommendation**: Add comment explaining Python 3.11 requirement.
+When implementing `src/data/onet_extractor.py`, I would need to:
 
-#### Issue 1.2: Missing Environment Variable Schema
-**Problem**: The plan mentions `.env.example` but doesn't define what environment variables are needed.
-**Gotcha**: Developers will need to guess what variables to set.
-**Required Variables** (inferred):
+1. Connect to `db/onet.db` (SQLite database)
+2. Read `db/ONET_WRITING_REFERENCE.md` for pre-processed writing tasks
+3. Extract task statements with writing relevance
+
+**What Works Well:**
+- The plan correctly identifies using the pre-processed reference document rather than hardcoding categories
+- SQLite approach is appropriate for the data size
+- aiosqlite for async operations is a good choice
+
+**Issues Identified:**
+
+1. **CRITICAL: ONET_WRITING_REFERENCE.md Format Unknown**
+   - The plan states "Use the pre-processed ONET_WRITING_REFERENCE.md file created by Opus" but doesn't define:
+     - What fields/columns are in this reference?
+     - Is it JSON, CSV, or markdown format?
+     - What "writing relevance" criteria were used?
+   - The code assumes it can map task_ids but the format is undefined
+
+2. **Missing O*NET Schema Knowledge**
+   - Plan references `task_statements` table but O*NET 30.1 has multiple tables:
+     - `task_statements`
+     - `task_ratings`
+     - `occupation_data`
+     - `job_zones`
+   - Need JOIN logic to get occupation titles and job zones
+
+3. **Gotcha: Task ID Format**
+   - O*NET task IDs are NOT simple strings like "T1"
+   - Real format is like "11-1011.00-T1" (occupation code + task number)
+   - The test fixture uses wrong format
+
+**Simulated Fix Required:**
+```python
+# Need to define ONET_WRITING_REFERENCE.md format explicitly
+# Suggest JSON Lines format:
+# {"task_id": "11-1011.00-T1", "onetsoc_code": "11-1011.00", "task": "...", "writing_relevance_score": 0.85}
 ```
-OPENROUTER_API_KEY=
-DEFAULT_PRESET=standard
-LOG_LEVEL=INFO
-RESULTS_DIR=./results
-MAX_CONCURRENT_REQUESTS=10
-```
-**Recommendation**: Add explicit `.env.example` contents to the plan.
 
-#### Issue 1.3: Database Migration Strategy Missing
-**Problem**: The plan mentions SQLite but doesn't specify how schema migrations will be handled.
-**Impact**: Medium - production systems need versioned migrations.
-**Recommendation**: Add `alembic` or a simple migration system to track schema versions.
+### 1.2 WritingPrompt Schema Simulation
+
+**What Works Well:**
+- Comprehensive schema covering all PROMPT.md dimensions
+- Uses pydantic for validation
+- Includes all required metadata fields
+- Correctly uses string for `communication_channel` instead of enum
+
+**Issues Identified:**
+
+1. **Missing Fields from PROMPT.md:**
+   - `recipient_english_variant` on recipients list - only tracked at top level
+   - `writer_english_variant` should be on WriterPersona (it's there but uses enum)
+   - No `audience_size` tracking at the recipient level for CC scenarios
+
+2. **Enum Constraints May Be Too Restrictive:**
+   - `generation: Literal["gen_z", "millennial", "gen_x", "boomer"]` - what about "silent generation" or future categories?
+   - `relationship: Literal[...]` - what about "external partner", "board member", "regulator"?
+
+3. **Edge Case: Multiple Primary Recipients**
+   - Schema has `is_primary: bool` but doesn't handle when you need to write to multiple people equally (team update)
+
+4. **PROMPT.md Requirement Not Met:**
+   - PROMPT.md: "Include realistic email addresses where appropriate (sarah.chen@acme.com)"
+   - Schema has `email: Optional[str]` but no logic to generate domain-appropriate emails
+
+### 1.3 Database Schema Simulation
+
+**What Works Well:**
+- Tables cover all core entities (prompts, responses, comparisons, votes)
+- Proper foreign key relationships
+- Indexes on key query columns
+- compliance_checks table for instruction-following
+
+**Issues Identified:**
+
+1. **Missing Tables:**
+   - No `models` table to track model metadata (pricing, rate limits)
+   - No `failures` table - plan mentions `failures.log` but structured storage better
+   - No `sensitive_topics` junction table (currently comma-separated string)
+   - No `attachments` table (can't query by attachment type)
+
+2. **Schema Normalization Issues:**
+   - `sensitive_topics TEXT` as comma-separated violates 1NF
+   - Company data duplicated in prompts table instead of normalized
+
+3. **Missing Columns:**
+   - `prompts.generated_by_model` - needed for bias analysis
+   - `responses.retry_count` - needed for reliability analysis
+   - `comparisons.gemini_was_position_a_count` - for position bias analysis
+
+4. **Index Gaps:**
+   - No index on `responses.prompt_id` - will slow joins
+   - No index on `votes.comparison_id` - same issue
+   - No composite index for `(gemini_model, competitor_model)` on comparisons
+
+### 1.4 OpenRouter Client Simulation
+
+**Walking through implementation:**
+
+When implementing the API client, I would:
+1. Create async HTTP client with httpx
+2. Implement per-model rate limiting
+3. Add circuit breaker pattern
+4. Handle retries with exponential backoff
+
+**What Works Well:**
+- httpx choice is correct for async
+- Per-model rate limiting is the right approach
+- Circuit breaker pattern addresses API failure robustness
+
+**Issues Identified:**
+
+1. **CRITICAL: OpenRouter Model IDs Not Verified**
+   - Plan uses model IDs like `google/gemini-3.0-pro-preview`, `openai/gpt-5.2-thinking-preview`
+   - These are ASSUMED model IDs - need to verify against OpenRouter API
+   - PROMPT.md says: "VERIFY URLS: discover and verify they exist using search and browse tools"
+   - The plan does NOT verify these model IDs exist on OpenRouter
+
+2. **Missing: Token Counting Implementation**
+   - Plan mentions `token_counter.py` but no implementation details
+   - Different models use different tokenizers (tiktoken for OpenAI, gemini tokenizer for Google)
+   - Without accurate token counting, cost estimates will be wrong
+
+3. **Rate Limit Configuration Unknown:**
+   - Plan says "Use model-specific limits from OpenRouter documentation"
+   - But doesn't provide actual values or show how to fetch them
+   - OpenRouter rate limits vary by tier/plan
+
+4. **Circuit Breaker State Serialization:**
+   - Plan shows `circuit_breaker_states: Dict[str, Dict]` but doesn't define the Dict structure
+   - What fields? `failure_count`, `last_failure_time`, `state` (open/closed/half-open)?
 
 ---
 
-## Part 2: O*NET Data Pipeline Simulation
+## 2. Phase 2 - Prompt Generation Pipeline Simulation
 
-### Simulation: Schema Validation
+### 2.1 Phase 1 Offline Generator Simulation
 
-Walking through the `ONetSchemaValidator` implementation:
+**Walking through implementation:**
 
-```python
-# Attempting to validate schema...
-REQUIRED_TABLES = {
-    "task_statements": ["task_id", "onetsoc_code", "task"],
-    "occupation_data": ["onetsoc_code", "title", "description"],
-    ...
-}
-```
+I would need to:
+1. Connect to OpenRouter for each evaluated model
+2. Generate 5 persona variations per task per model
+3. Cache results to `data/offline_variations/`
+4. Parse JSON responses from LLMs
 
-#### Issue 2.1: Actual O*NET Table Names Differ
-**Problem**: According to ONET_WRITING_REFERENCE.md, the actual O*NET schema uses slightly different conventions.
-**Evidence**: The reference shows `task_statements` and `occupation_data` which match, but I need to verify `job_zones` vs `job_zone_reference`.
+**What Works Well:**
+- Using all evaluated models for generation avoids single-model bias
+- Caching prevents redundant API calls
+- PersonaVariation dataclass captures needed fields
 
-**Simulation Query**:
-```sql
--- From ONET_REFERENCE.md, we see job_zone_reference table
-SELECT * FROM job_zone_reference;
--- But plan code references 'job_zones' table
-```
+**Issues Identified:**
 
-**Gotcha**: The plan's `REQUIRED_TABLES` may have wrong table name - should verify against actual db/onet.db schema.
-**Recommendation**: Add startup script to discover actual schema and generate validation rules dynamically.
+1. **CRITICAL: Cost of Phase 1 Generation Not Estimated**
+   - If O*NET has ~20,000 writing tasks
+   - 6 models * 5 variations * 20,000 tasks = 600,000 API calls JUST for Phase 1
+   - At ~$0.01/call average = $6,000+ for Phase 1 alone
+   - This is NOT included in the preset cost estimates!
 
-#### Issue 2.2: Element ID Verification May Fail
-**Problem**: The plan hardcodes element IDs like `'4.C.1.a.2.h'` for Electronic Mail Work Context.
-**Gotcha**: These IDs are correct per ONET_REFERENCE.md, but the plan doesn't handle the case where O*NET updates these in future versions.
-**Recommendation**: Add fallback element lookup by name, not just ID.
+2. **JSON Parsing Robustness:**
+   - Code does `json.loads(content)` but LLMs often:
+     - Add explanatory text before/after JSON
+     - Use markdown code fences inconsistently
+     - Return malformed JSON
+   - Need more robust extraction with regex fallbacks
 
-### Simulation: Task Extraction
+3. **Generation Model Rotation:**
+   - Code generates from ALL models for EVERY task
+   - Better approach: Round-robin assignment to distribute load
+   - Current approach: 6x the API calls needed
 
-Walking through `ONetExtractor.extract_writing_tasks()`:
+4. **Missing: Deduplication**
+   - Same persona might be generated by multiple models
+   - No deduplication logic for similar variations
+   - Could end up with "Sarah Chen, VP Marketing" from 3 different models
 
-```python
-query = """
-SELECT
-    t.task_id,
-    t.onetsoc_code,
-    o.title as occupation_title,
-    ...
-FROM task_statements t
-JOIN occupation_data o ON t.onetsoc_code = o.onetsoc_code
-LEFT JOIN job_zones jz ON t.onetsoc_code = jz.onetsoc_code
-...
-"""
-```
+5. **Error Handling Gap:**
+   - `except Exception as e: print(...)` swallows errors
+   - If a model is down, we just skip without tracking
+   - Need structured error logging
 
-#### Issue 2.3: SQL Join May Be Wrong
-**Problem**: ONET_REFERENCE shows `job_zones` table with columns `onetsoc_code, job_zone`, but the reference also mentions `job_zone_reference` which is a lookup table.
-**Gotcha**: Need to verify the actual join key. The `job_zones` table may be named differently or structured differently.
-**Recommendation**: Run actual query against db/onet.db to verify.
+### 2.2 Phase 2 Algorithmic Combiner Simulation
 
-#### Issue 2.4: Scale ID Assumptions
-**Problem**: The query assumes `scale_id = 'IM'` for importance and `scale_id = 'CX'` for work context frequency.
-**Evidence**: This is correct per ONET_REFERENCE.md which states "Importance (IM scale): 1-5" and "Work Context (CX scale): 1-5".
-**Status**: Works as expected.
+**What Works Well:**
+- Stratification by job zone and SOC group ensures diversity
+- Deterministic RNG from seed enables reproducibility
+- Fallback to algorithmic generation if no variations exist
 
-#### Issue 2.5: Writing Relevance Scoring Could Miss Tasks
-**Problem**: The `_compute_writing_relevance()` function uses regex patterns but may miss important writing tasks.
-**Example**: Task "Coordinate with clients regarding project requirements" doesn't match any pattern but clearly involves written communication.
-**Recommendation**: Lower minimum relevance threshold OR add more patterns like:
-- `r'\bconfer\b'` - 0.5
-- `r'\bcoordinate\b'` - 0.5
-- `r'\bconsult\b'` - 0.5
+**Issues Identified:**
 
-### Simulation: NAICS Mapping
+1. **CRITICAL: Company Database Missing**
+   - Plan references `CompanyDatabase` with 500+ companies
+   - No implementation or data file provided
+   - `company_database.py` just mentioned in project structure
+   - Where does `data/companies.json` come from?
 
-#### Issue 2.6: BLS Matrix Data Not Provided
-**Problem**: The plan mentions using BLS Occupation-Industry Matrix but doesn't include this data or explain how to obtain it.
-**Gotcha**: Without BLS data, the system falls back to hardcoded `FALLBACK_SOC_TO_NAICS` which is incomplete.
-**Missing Data**: The plan shows only partial mappings for SOC codes 11, 13, 15, 17.
-**Impact**: High - 18 of 22 SOC major groups have no mapping.
-**Recommendation**:
-1. Add complete FALLBACK_SOC_TO_NAICS for all 22 SOC groups
-2. Document how to obtain and process BLS matrix data
-3. Provide download script or include data file
+2. **NAICS Mapper Implementation Missing:**
+   - `NAICSMapper` class referenced but not implemented
+   - How does occupation code map to NAICS codes?
+   - O*NET doesn't directly link to NAICS
 
-#### Issue 2.7: NAICS Sectors List Incomplete
-**Problem**: The `NAICS_SECTORS` dict shows 20 sectors but skips some codes.
-**Evidence**: Codes shown are 11, 21, 22, 23, 31, 42, 44, 48, 51, 52, 53, 54, 55, 56, 61, 62, 71, 72, 81, 92.
-**Missing**: 32, 33 (Manufacturing subsectors), 45 (Retail subsector), 49 (Transportation subsector).
-**Recommendation**: Use 2-digit NAICS consistently (31-33 are all Manufacturing, etc.) and document this.
+3. **Name Generator Implementation Missing:**
+   - References Census-based names at `data/names_census.json`
+   - No implementation details
+   - Census data needs preprocessing for demographic distribution
 
----
+4. **Stratification Logic Bug:**
+   - `_stratify_by_job_zone` returns `min(per_zone, len(zone_tasks))` per zone
+   - If zone 5 has only 10 tasks but per_zone is 100, you get 10
+   - Then `tasks[:num_prompts]` might cut off unevenly
+   - Need to track actual counts returned
 
-## Part 3: Company Database Simulation
+5. **Generation-to-Age Mapping:**
+   - `_generation_to_age` helper referenced but not implemented
+   - Gen Z: 18-28, Millennial: 29-44, Gen X: 45-60, Boomer: 61-78?
+   - These ranges shift each year - need to calculate from birthyear ranges
 
-### Simulation: Real Company Lookup
+### 2.3 Phase 3 Enrichment Simulation
 
-```python
-def get_company(self, naics_code: str, company_size: CompanySize, ...):
-    candidates = [
-        c for c in self._companies
-        if c['naics'].startswith(naics_code[:2])
-        and c['size'] == company_size.value
-    ]
-```
+**What Works Well:**
+- Selective enrichment (30%) reduces API costs
+- Multiple enrichment types aligned with PROMPT.md
+- Temporal context uses correct date (Jan 6, 2026)
 
-#### Issue 3.1: No Companies.json Provided
-**Problem**: The plan references `data/companies.json` but doesn't provide this file or explain its structure.
-**Impact**: Critical - the system won't work without this data.
-**Required Structure** (inferred):
-```json
-[
-  {
-    "name": "Apple Inc.",
-    "naics": "334111",
-    "size": "enterprise",
-    "industry": "Computer and Electronic Product Manufacturing",
-    "hq_location": "Cupertino, CA",
-    "public": true
-  }
-]
-```
-**Recommendation**: Provide initial companies.json with at least 100-200 real companies across major NAICS sectors and sizes.
+**Issues Identified:**
 
-#### Issue 3.2: async/await Mixing Bug
-**Problem**: In `get_company()`, there's a bug - it calls `await self._generate_companies()` inside a sync function.
-```python
-def get_company(...) -> Company:  # Not async!
-    ...
-    if cache_key not in self._generated_cache and llm_client:
-        self._generated_cache[cache_key] = await self._generate_companies(  # BUG!
-```
-**Impact**: Will raise runtime error.
-**Recommendation**: Make `get_company()` async or separate generation into a pre-population phase.
+1. **Enrichment Ratio Conflicts:**
+   - Config says `phase3_enrich_ratio: float = 0.3`
+   - But individual enrichments have their own probabilities:
+     - Tone matching: 15%
+     - Temporal: 20%
+   - These stack, so some prompts get multiple enrichments while 70% get none
+   - Need clearer distribution strategy
 
-#### Issue 3.3: Company Size Enum Mismatch
-**Problem**: `CompanySize` enum has STARTUP, SMALL, MEDIUM, LARGE, ENTERPRISE but the prompt mentions "Fortune 500, mid-market, small businesses, startups".
-**Gotcha**: Need to map between terminology consistently.
-**Recommendation**: Add mapping:
-- Fortune 500 -> ENTERPRISE
-- mid-market -> LARGE or MEDIUM
-- small businesses -> SMALL
-- startups -> STARTUP
+2. **Async Iteration Bug:**
+   - `indices_to_enrich = set(random.sample(...))` creates a set
+   - `list(indices_to_enrich)[batch_start + j]` - set iteration order is NOT guaranteed
+   - Will cause incorrect index mapping after batching
+
+3. **Attachment Content Too Generic:**
+   - Generated attachment summaries use placeholders like "[COMPANY]" and "[METRIC]"
+   - These need to be filled in or the model responses will be confused
+   - Need post-processing to fill placeholders
+
+4. **Missing: Reply-To Context Distribution**
+   - PROMPT.md lists specific reply scenarios:
+     - "Angry customer email"
+     - "Vague request from boss"
+     - "Technical question from colleague"
+     - "Rejection to negotiate"
+   - Current implementation just generates generic "prior message"
+   - Need scenario-specific generation prompts
+
+5. **_build_prompt_text Missing Handling:**
+   - Revision tasks need different prompt structure
+   - Code builds standard prompt even for revision tasks
+   - Need conditional structure for `is_revision_task`
 
 ---
 
-## Part 4: Name Generation Simulation
+## 3. Evaluation Engine Simulation
 
-#### Issue 4.1: Limited Name Diversity
-**Problem**: The name pools are very limited (~7 first names and ~6 last names per demographic group).
-**Impact**: With 500+ prompts, names will repeat frequently.
-**Calculation**: 7 * 7 * 2 * 5 = 490 unique combinations maximum (first * last * gender * demographic).
-**Recommendation**: Expand name pools to 50+ per category or use external name generation service.
+### 3.1 Response Generation Flow
 
-#### Issue 4.2: Age/Generation Not Connected to Names
-**Problem**: PROMPT.md requires personas across "GenZ/GenA all the way through to Boomer" but name generation doesn't account for generational naming patterns.
-**Example**: "Brittany" and "Tiffany" are more common for Gen X, while "Ava" and "Emma" are more common for Gen Z.
-**Recommendation**: Add generational name pools and link them to persona age.
+**Walking through implementation:**
 
-#### Issue 4.3: "Other" Demographic Not Defined
-**Problem**: `DEMOGRAPHIC_WEIGHTS` includes "other": 0.01 but `NAME_POOLS` doesn't have an "other" key.
-**Impact**: Will use fallback to "white" names, which defeats diversity purpose.
-**Recommendation**: Either remove "other" from weights or add name pools for additional demographics (Native American, Middle Eastern, Pacific Islander, etc.).
+For each prompt + model pair:
+1. Send prompt to model via OpenRouter
+2. Track response metadata (tokens, latency, cost)
+3. Detect format patterns (bullets, headers)
+4. Classify any failures/refusals
+5. Save to database and checkpoint
 
----
+**Issues Identified:**
 
-## Part 5: Prompt Generation Pipeline Simulation
+1. **Missing: Response Analyzer Implementation**
+   - Plan mentions `response_analyzer.py` for format detection
+   - No implementation provided
+   - How to detect:
+     - `has_bullets` - regex for `^[\-\*\•]`?
+     - `has_headers` - regex for `^#{1,6}` or `^[A-Z][^.!?]*:$`?
+     - `greeting_type` - classify "Hi", "Dear", "Hey", etc.?
+     - `signoff_type` - classify "Best", "Thanks", "Cheers", etc.?
 
-### Phase 1 Simulation
+2. **Missing: Refusal Classifier Implementation**
+   - PROMPT.md requires categorizing WHY models refuse:
+     - Safety refusal
+     - Capability limitation
+     - Misunderstanding
+     - Incomplete response
+     - Off-topic
+   - No classification logic provided
+   - Need keyword matching or LLM-based classification
 
-#### Issue 5.1: Persona Generation Prompt Too Vague
-**Problem**: The `PERSONA_GENERATION_PROMPT` asks for "diverse professional personas" but doesn't specify:
-- Age ranges
-- Regional diversity (US regions, international)
-- Industry distribution targets
-**Impact**: LLM may generate similar personas.
-**Recommendation**: Add specific distribution requirements to the prompt.
+3. **Formality Detection Missing:**
+   - Bias detection references `detected_formality` (1-5)
+   - No implementation for detecting formality from response text
+   - Need NLP analysis or heuristics
 
-#### Issue 5.2: Cache Path Not Configurable
-**Problem**: Persona cache is stored at a fixed path but the location isn't specified in config.
-**Gotcha**: Multiple runs could conflict or overwrite each other's caches.
-**Recommendation**: Include run_id or hash in cache path.
+4. **Auto-Loss Logic Not Implemented:**
+   - PROMPT.md: "If a model refuses to respond... it automatically loses"
+   - No code showing how to detect refusal and mark as auto-loss
+   - Need to integrate refusal detection with vote aggregation
 
-### Phase 2 Simulation
+### 3.2 Judge System Simulation
 
-#### Issue 5.3: Stratification Dimension Explosion
-**Problem**: With 8 stratification dimensions, the number of strata explodes:
-```
-job_zone (5) * writing_category (~10) * channel (~6) * formality (4) *
-word_count_tier (3) * urgency (3) * soc_major_group (22) * naics_sector (20)
-= 5 * 10 * 6 * 4 * 3 * 3 * 22 * 20 = 9,504,000 potential strata
-```
-**Impact**: Most strata will be empty, making stratified sampling ineffective.
-**Recommendation**:
-1. Reduce dimensions to 4-5 most important
-2. Use hierarchical stratification (first by SOC, then by formality, etc.)
-3. Accept natural distribution for some dimensions
+**What Works Well:**
+- Full scenario context provided to judges
+- Both personas (Expert + Recipient) implemented
+- Position randomization with deterministic hash
 
-#### Issue 5.4: Missing Word Count Tier Assignment
-**Problem**: `word_count_tier` appears in stratification but it's unclear where it gets assigned.
-**Gotcha**: The `_combination_to_prompt` function uses `combo.get('word_count_tier', 'medium')` but no code assigns this value.
-**Recommendation**: Add word count tier sampling logic in `_generate_all_combinations()`.
+**Issues Identified:**
 
-### Phase 3 Simulation
+1. **CRITICAL: Judge Response Parsing Fragile**
+   - Expects EXACT format:
+     ```
+     WINNER: [A/B/TIE]
+     CONFIDENCE: [1-5]
+     ...
+     ```
+   - LLMs often:
+     - Add preamble ("I've carefully evaluated...")
+     - Use different formatting ("Winner: A" vs "WINNER: A")
+     - Provide reasoning inline
+   - Need robust regex parsing with fallbacks
 
-#### Issue 5.5: Enrichment Prompt Format Strings May Fail
-**Problem**: The enrichment prompt uses f-string formatting with nested object attributes:
-```python
-filled_prompt = self.ENRICHMENT_PROMPT.format(
-    persona=base_prompt.persona,  # This will print the object repr
-    company=base_prompt.company,
-    ...
-)
-```
-**Gotcha**: Python's `.format()` doesn't support nested attribute access like `{persona.job_title}`.
-**Impact**: Will either fail or produce unhelpful output.
-**Recommendation**: Pre-extract all needed values or use Jinja2 templating.
+2. **Judge Persona Context Incomplete:**
+   - Recipient persona template uses `{recipient_name}` etc.
+   - But doesn't include:
+     - Recipient's technical level
+     - Recipient's time constraints
+     - Cultural context
 
-#### Issue 5.6: Temperature 0.7 May Be Too High
-**Problem**: Enrichment uses `temperature=0.7` which may produce inconsistent or overly creative results.
-**Risk**: Some prompts may become unrealistic or contain hallucinations.
-**Recommendation**: Lower to 0.4-0.5 for more consistent enrichment.
+3. **Missing: Judge Instruction Compliance Check**
+   - PROMPT.md: "Include some prompts with explicit constraints"
+   - Judges should specifically verify constraint compliance
+   - Current judge prompt mentions it but doesn't emphasize
 
----
+4. **Missing: Sensitive Topic Context for Judges**
+   - If prompt is tagged with sensitive topics
+   - Judges should know to evaluate appropriateness carefully
+   - Current judge prompt doesn't receive `sensitive_topics` field
 
-## Part 6: Response Collection Simulation
+### 3.3 Vote Aggregation Simulation
 
-#### Issue 6.1: Model ID Placeholders Are Speculative
-**Problem**: The plan uses model IDs like `"google/gemini-3.0-pro"` which are fictional.
-**Evidence**: As of Jan 2026, actual OpenRouter model IDs would be different (e.g., `"google/gemini-2.0-flash-exp"`).
-**Impact**: Critical - the system will fail at runtime.
-**Recommendation**:
-1. Fetch model list from OpenRouter API at startup
-2. Provide model ID mapping in config file
-3. Add model discovery command: `gemini-eval discover-models`
+**What Works Well:**
+- Majority-of-majorities logic correctly implemented
+- Winner normalized to "gemini"/"competitor"/"tie"
+- Position tracking for bias analysis
 
-#### Issue 6.2: `_estimate_max_tokens()` Not Implemented
-**Problem**: `ResponseCollector._collect_single()` calls `self._estimate_max_tokens(prompt)` but this method isn't defined.
-**Impact**: Will fail at runtime.
-**Recommendation**: Add implementation based on word_count_tier:
-```python
-def _estimate_max_tokens(self, prompt: EnrichedPrompt) -> int:
-    tier_to_tokens = {"short": 500, "medium": 1000, "long": 2000}
-    return tier_to_tokens.get(prompt.word_count_tier, 1000)
-```
+**Issues Identified:**
 
-#### Issue 6.3: Response Metadata Tracking Missing
-**Problem**: PROMPT.md requires tracking "Response length, Response time, Format detection, Greeting/sign-off patterns" but `ModelResponse` schema doesn't include format_detected or greeting_patterns fields.
-**Recommendation**: Extend `ModelResponse`:
-```python
-class ModelResponse(BaseModel):
-    ...
-    format_detected: Optional[str] = None  # email/memo/report/etc.
-    has_greeting: Optional[bool] = None
-    has_signoff: Optional[bool] = None
-    bullet_count: Optional[int] = None
-    paragraph_count: Optional[int] = None
-```
+1. **Edge Case: All Ties**
+   - If all 5 votes from a judge are ties
+   - `aggregate_for_judge` returns "tie"
+   - But majority-of-majorities needs handling when judges split
+   - If Judge1=tie, Judge2=gemini, Judge3=competitor -> what's the final?
 
----
+2. **Handling Incomplete Votes:**
+   - What if API fails during judging and only 3/5 votes collected?
+   - Code doesn't handle partial judge data
+   - Should use available votes or mark as incomplete?
 
-## Part 7: Judging System Simulation
+3. **Missing: Confidence Weighting Option**
+   - Votes have `confidence: int` (1-5)
+   - Plan doesn't use this for aggregation
+   - High-confidence votes might deserve more weight
 
-### Dual Persona Judge Simulation
-
-#### Issue 7.1: Recipient Role Inference Missing
-**Problem**: `DualPersonaJudge._infer_recipient_role()` is called but not implemented.
-```python
-recipient_system = self.RECIPIENT_SYSTEM_TEMPLATE.format(
-    recipient_name=prompt.recipient.full,
-    recipient_role=self._infer_recipient_role(prompt),  # NOT IMPLEMENTED
-    company=prompt.company.name
-)
-```
-**Impact**: Will fail at runtime.
-**Recommendation**: Add implementation:
-```python
-def _infer_recipient_role(self, prompt: EnrichedPrompt) -> str:
-    # Look for role hints in prompt context
-    if prompt.context_details.get('stakeholders'):
-        return prompt.context_details['stakeholders'][0]
-    return f"colleague at {prompt.company.name}"
-```
-
-#### Issue 7.2: Judge System Prompts May Cause Position Bias
-**Problem**: The WRITING_EXPERT_SYSTEM and RECIPIENT_SYSTEM prompts don't explicitly instruct judges to avoid position bias.
-**Research**: Studies show LLM judges tend to prefer the first response (position A).
-**Recommendation**: Add to both system prompts:
-```
-IMPORTANT: Evaluate each response on its merits alone. The order of presentation (A vs B)
-has no bearing on quality. Focus solely on the writing quality and effectiveness.
-```
-
-#### Issue 7.3: Temperature 0.3 May Still Cause Inconsistency
-**Problem**: Even with temperature=0.3, judges may give different verdicts on identical comparisons.
-**Impact**: Reduces reliability of majority voting.
-**Recommendation**: Consider temperature=0.1 for judging, or implement a consistency check:
-```python
-# If same judge gives contradictory results on position shuffle, flag for review
-if expert_ab.winner != self._reverse_winner(expert_ba.winner):
-    flag_inconsistent_judgment(...)
-```
-
-### Position Bias Handler Simulation
-
-#### Issue 7.4: Position Shuffle Doubles API Costs
-**Problem**: Shuffling positions means running each judgment twice (A-B and B-A orders).
-**Impact**: Judging costs double what the cost estimates assume.
-**Calculation**:
-- 500 prompts * 4 model pairs * 3 judges * 5 votes * 2 personas * 2 positions
-- = 120,000 judge API calls instead of 60,000
-**Recommendation**: Either:
-1. Update cost estimates to reflect position shuffling
-2. Make position shuffling optional
-3. Use statistical correction instead of full shuffling
-
-#### Issue 7.5: Position Majority Logic Has Edge Case
-**Problem**: With only 2 position orderings, a tie is possible and common.
-```python
-def _position_majority(self, winners: list[str], model_a: str, model_b: str) -> str:
-    a_count = winners.count(model_a)
-    b_count = winners.count(model_b)
-    if a_count > b_count:
-        return model_a
-    elif b_count > a_count:
-        return model_b
-    else:
-        return "TIE"
-```
-**Gotcha**: If AB order says A wins and BA order says B wins (now in position A), the logic is correct BUT the mapping may be confusing.
-**Recommendation**: Add unit tests with explicit examples and comments explaining the mapping.
-
-### Vote Aggregation Simulation
-
-#### Issue 7.6: Majority-of-Majorities May Not Match PROMPT.md Spec
-**Problem**: PROMPT.md says "Best-of-5 judgments per comparison" but the plan aggregates across personas and positions differently.
-**Spec says**:
-1. Each judge gives 5 judgments -> majority winner
-2. Take majority across 3 judges
-**Plan does**:
-1. Each judge gives 2 position orderings * 2 personas = 4 judgments
-2. Aggregate across all judge-persona combinations
-
-**Impact**: The aggregation logic doesn't match the specification.
-**Recommendation**: Implement exactly as specified:
-```python
-# For each judge model:
-#   Run 5 independent judgments
-#   Take majority -> that judge's vote
-# Across 3 judges, take majority -> final winner
-```
-
-#### Issue 7.7: Best-of-5 Not Actually Implemented
-**Problem**: The plan mentions best-of-5 but the code only runs 2 judgments per judge (one per position order).
-**Impact**: Statistical power is lower than expected.
-**Recommendation**: Implement actual best-of-5:
-```python
-async def best_of_n_judgment(self, ..., n: int = 5) -> str:
-    votes = []
-    for i in range(n):
-        result = await self._single_judgment(...)
-        votes.append(result.winner)
-    return Counter(votes).most_common(1)[0][0]
-```
+4. **Judge Agreement Calculation:**
+   - `agreement = max(gemini_judges, competitor_judges) / len(judge_majorities)`
+   - This is NOT Cohen's Kappa
+   - Plan mentions Kappa in statistics but uses simple agreement here
+   - Inconsistent metrics
 
 ---
 
-## Part 8: Analysis Engine Simulation
+## 4. Checkpoint and Resume Simulation
 
-### Statistics Engine Simulation
+### 4.1 Checkpoint State Management
 
-#### Issue 8.1: scipy.stats.binom_test Deprecated
-**Problem**: The code uses `stats.binom_test()` which is deprecated in scipy 1.12+.
-```python
-p_value = stats.binom_test(position_a_wins, ...)  # DEPRECATED
-```
-**Impact**: Will raise deprecation warnings or fail in future scipy versions.
-**Recommendation**: Use `stats.binomtest()` instead:
-```python
-result = stats.binomtest(position_a_wins, n=total, p=0.5, alternative='two-sided')
-p_value = result.pvalue
-```
+**What Works Well:**
+- Fine-grained checkpointing (per-vote)
+- Atomic writes with temp file + rename
+- Circuit breaker state persistence
 
-#### Issue 8.2: Pearson Correlation Misuse in Length Bias Detection
-**Problem**: The length bias detection calculates correlation incorrectly:
-```python
-correlation, p_value = stats.pearsonr(
-    [1 if r.winner == r.model_a else 0 for r in results if r.winner != "TIE"],
-    length_diffs[:len([r for r in results if r.winner != "TIE"])]
-)
-```
-**Issue**: This tests correlation between "which model won" and "absolute length difference", which doesn't make sense. Should test correlation between "longer response won" and "length difference magnitude".
-**Recommendation**: Rewrite:
-```python
-longer_won = []
-length_diffs_nonzero = []
-for r in results:
-    if r.winner == "TIE":
-        continue
-    len_a = len(responses[r.model_a])
-    len_b = len(responses[r.model_b])
-    if len_a == len_b:
-        continue
-    winner_was_longer = (r.winner == r.model_a and len_a > len_b) or \
-                        (r.winner == r.model_b and len_b > len_a)
-    longer_won.append(1 if winner_was_longer else 0)
-    length_diffs_nonzero.append(abs(len_a - len_b))
+**Issues Identified:**
 
-# Then test if longer_won rate is > 0.5
-```
+1. **Race Condition Risk:**
+   - `asyncio.Lock()` protects save
+   - But `completed_votes.add(vote_id)` before `await self.save()`
+   - If crash between add and save, state inconsistent
+   - Need to save THEN add to in-memory set
 
-### Weakness Finder Simulation
+2. **Checkpoint File Growth:**
+   - All completed vote IDs stored as list
+   - 10,000 prompts * 4 pairs * 3 judges * 2 personas * 5 votes = 1.2M vote IDs
+   - checkpoint.json could grow to 50MB+
+   - Consider using SQLite for checkpoint state too
 
-#### Issue 8.3: `_matches_dimension()` Not Implemented
-**Problem**: `WeaknessFinder.analyze_losses()` calls `self._matches_dimension(r, prompts, dimension, value)` but this method isn't defined.
-**Impact**: Will fail at runtime.
-**Recommendation**: Implement:
-```python
-def _matches_dimension(self, result, prompts, dimension, value) -> bool:
-    prompt = prompts.get(result.prompt_id)
-    if not prompt:
-        return False
-    dimension_getters = {
-        'category': lambda p: p.task.inferred_category,
-        'channel': lambda p: p.expected_format,
-        'formality': lambda p: p.formality,
-        'job_zone': lambda p: p.task.job_zone,
-        'industry': lambda p: p.industry,
-    }
-    getter = dimension_getters.get(dimension)
-    return getter and getter(prompt) == value
-```
+3. **Resume Logic Gap:**
+   - `get_partial_comparison` returns data but
+   - No code shows how to USE partial data to resume mid-comparison
+   - Need to restore generated responses, skip completed votes
 
-#### Issue 8.4: `result.raw_judgments` and `result.gemini_position` Not in Schema
-**Problem**: `_extract_reasoning_themes()` accesses fields not in `AggregatedResult`:
-```python
-for judgment in loss.raw_judgments:  # raw_judgments not in schema
-    if loss.gemini_position == 'A':   # gemini_position not in schema
-```
-**Impact**: Will raise AttributeError at runtime.
-**Recommendation**: Add to `AggregatedResult` schema:
-```python
-class AggregatedResult(BaseModel):
-    ...
-    raw_judgments: list[JudgmentResult]
-    gemini_model_id: str  # To identify which model is Gemini
-```
+4. **Missing: Checkpoint Versioning**
+   - What if checkpoint schema changes between versions?
+   - No version field in checkpoint.json
+   - Old checkpoints might fail to load
+
+### 4.2 Run Directory Structure
+
+**What Works Well:**
+- Complete directory structure per PROMPT.md spec
+- Atomic writes for all file operations
+- Symlink to latest run
+
+**Issues Identified:**
+
+1. **symlink_to Uses Relative Path:**
+   - `latest_link.symlink_to(self.run_dir.name)` creates relative symlink
+   - Works if you're in `results/` but breaks if accessed from elsewhere
+   - Should use absolute path
+
+2. **Missing: Directory Locking**
+   - What if two processes try to write to same run directory?
+   - No file locking mechanism
+   - Could corrupt results
+
+3. **organize_prompts_by_* Memory Issue:**
+   - Loads all prompts into memory to group
+   - For 10,000+ prompts, this is fine
+   - But unnecessary memory allocation
 
 ---
 
-## Part 9: TUI Implementation Simulation
+## 5. Analysis and Statistics Simulation
 
-#### Issue 9.1: `self.eval_state` Not Initialized
-**Problem**: `EvalTUI.refresh_data()` accesses `self.eval_state` but it's never set:
-```python
-async def refresh_data(self) -> None:
-    if self.eval_state:  # Where is this set?
-        self.prompts_completed = self.eval_state.completed_count
-```
-**Impact**: Will always skip update since eval_state is None.
-**Recommendation**: Add initialization method:
-```python
-def set_eval_state(self, state: EvalState) -> None:
-    self.eval_state = state
-```
-And call from orchestrator.
+### 5.1 Statistical Analysis
 
-#### Issue 9.2: Textual API Changes
-**Problem**: The textual library evolves rapidly. Methods like `Static.update()` may have changed.
-**Impact**: Code may not work with latest textual version.
-**Recommendation**: Pin textual version explicitly: `"textual==0.52.1"` and test before release.
+**What Works Well:**
+- Correctly uses `scipy.stats.binomtest` (not deprecated `binom_test`)
+- Wilson score intervals for confidence intervals
+- Cohen's Kappa implementation for inter-rater reliability
 
-#### Issue 9.3: Missing Keyboard Shortcuts Documentation
-**Problem**: TUI defines bindings but there's no in-app help screen.
-**Recommendation**: Add help overlay:
-```python
-def action_help(self) -> None:
-    self.push_screen(HelpScreen())
-```
+**Issues Identified:**
 
----
+1. **Effect Size Interpretation Missing:**
+   - Calculates Cohen's h but doesn't interpret it
+   - Small: 0.2, Medium: 0.5, Large: 0.8
+   - Should include in WinRateResult or analysis output
 
-## Part 10: Configuration and Presets Simulation
+2. **Multiple Comparisons Problem:**
+   - If testing 4 model pairs * 5 job zones * 10 industries
+   - That's 200 hypothesis tests
+   - Need Bonferroni correction or FDR control
+   - Plan doesn't address this
 
-#### Issue 10.1: Cost Estimates Are Unrealistic
-**Problem**: Preset cost estimates seem too low:
-- "smoke" preset: $0.50 for 5 prompts
-- That's $0.10 per prompt
-- But each prompt needs: 2+ model responses (~$0.02-0.10 each) + 3 judges * 5 votes * 2 personas * 2 positions = 60 judge calls (~$0.01-0.05 each)
-- Realistic cost: $0.20-0.50 per prompt minimum
+3. **Sample Size for Significance:**
+   - With 100 prompts, statistical power may be low
+   - Need power analysis to determine minimum sample size
+   - Preset 4 (100 prompts) may be too small for reliable conclusions
 
-**Calculation for "standard" preset (200 prompts)**:
-- Response generation: 200 * 4 model pairs * 2 responses = 1,600 calls
-- Judging: 200 * 4 pairs * 3 judges * 5 votes * 2 personas = 24,000 calls (if best-of-5)
-- Or with position shuffling: 48,000 calls
-- At $0.01 per call average = $240-480, not $75
+4. **Ties Excluded from Binomial Test:**
+   - `decisive = wins + losses` excludes ties
+   - But ties carry information - similar quality
+   - Should consider different statistical approach
 
-**Recommendation**: Recalculate all preset costs using actual OpenRouter pricing for specified models.
+### 5.2 Bias Detection
 
-#### Issue 10.2: Preset Judge Models Include Evaluated Models
-**Problem**: "standard" preset uses `"google/gemini-3.0-pro"` as both evaluated model AND judge.
-```python
-judge_models=["anthropic/claude-opus-4.5", "openai/gpt-5.2", "google/gemini-3.0-pro"],
-```
-**Impact**: Self-preference bias - Gemini judging Gemini vs competitors.
-**Recommendation**: Either:
-1. Exclude Gemini from judges when evaluating Gemini
-2. Always detect and report self-preference bias
-3. Use only non-competing models as judges
+**What Works Well:**
+- Covers all bias types from PROMPT.md:
+  - Position bias
+  - Length bias
+  - Model fingerprinting
+  - Formality drift
 
-#### Issue 10.3: Missing Time Estimation Logic
-**Problem**: Presets have `estimated_time_minutes` but no code calculates this.
-**Factors to consider**:
-- API rate limits per model
-- Concurrent request limits
-- Average response latency
-- Network overhead
-**Recommendation**: Add `CostEstimator.estimate_time()` that accounts for:
-```python
-def estimate_time(self, config: EvalConfig) -> TimeEstimate:
-    total_api_calls = self._count_api_calls(config)
-    effective_rate = min(
-        config.max_concurrent_requests,
-        self._get_rate_limit(config.models)
-    )
-    base_time_seconds = total_api_calls / effective_rate
-    # Add overhead for processing, retries, etc.
-    return TimeEstimate(
-        optimistic=base_time_seconds * 1.2,
-        realistic=base_time_seconds * 1.8,
-        pessimistic=base_time_seconds * 3.0
-    )
-```
+**Issues Identified:**
 
----
+1. **detect_length_bias Data Requirements:**
+   - Expects `gemini_word_count` and `competitor_word_count` in comparisons
+   - These fields not in database schema
+   - Need JOIN with responses table or add to schema
 
-## Part 11: Error Handling Simulation
+2. **detect_formality_drift Data Requirements:**
+   - Expects `prompt_formality` and `detected_formality` in responses
+   - `detected_formality` not in response schema
+   - Need response analyzer to compute this
 
-#### Issue 11.1: Checkpoint File Race Condition
-**Problem**: The atomic write pattern has a subtle race:
-```python
-async with aiofiles.open(self.temp_file, 'w') as f:
-    await f.write(json.dumps(checkpoint_data, indent=2))
-self.temp_file.rename(self.checkpoint_file)  # Not awaited!
-```
-**Gotcha**: `Path.rename()` is synchronous and blocks the event loop. Also, on Windows, rename fails if target exists.
-**Recommendation**:
-```python
-import shutil
-await asyncio.to_thread(shutil.move, str(self.temp_file), str(self.checkpoint_file))
-```
+3. **detect_model_fingerprinting Logic Issue:**
+   - Compares Gemini win rate when in position A vs B
+   - But this tests POSITION bias, not fingerprinting
+   - True fingerprinting would be: Do judges favor responses with certain stylistic markers?
+   - Need different analysis approach
 
-#### Issue 11.2: Circuit Breaker Missing Per-Model State Persistence
-**Problem**: Circuit breaker state is in-memory only. If the process restarts, all circuits reset to closed.
-**Impact**: After resume, may immediately hit API limits again.
-**Recommendation**: Persist circuit state to checkpoint file:
-```python
-checkpoint_data = {
-    ...
-    "circuit_states": {
-        model_id: {
-            "state": state.value,
-            "failure_count": self._failure_counts[model_id],
-            "last_failure": self._last_failure_time.get(model_id)
-        }
-        for model_id, state in self._states.items()
-    }
-}
-```
+4. **Missing Bias Types:**
+   - **Format bias**: Do judges prefer bullet points?
+   - **Length preference by judge**: Individual judge length preferences
+   - **Self-preference**: Does Gemini judge favor Gemini responses?
 
-#### Issue 11.3: `RateLimitError` and `TransientError` Not Defined
-**Problem**: The `FailureHandler` catches these exceptions but they're not defined anywhere:
-```python
-except RateLimitError as e:
-    ...
-except TransientError as e:
-    ...
-except PermanentError as e:
-```
-**Impact**: Will raise NameError.
-**Recommendation**: Define exception classes:
-```python
-class APIError(Exception):
-    pass
+### 5.3 Weakness Analysis
 
-class RateLimitError(APIError):
-    def __init__(self, message: str, retry_after: int | None = None):
-        super().__init__(message)
-        self.retry_after = retry_after
+**Issues Identified:**
 
-class TransientError(APIError):
-    pass
+1. **weakness_finder.py Not Implemented:**
+   - Plan mentions it in project structure
+   - Section 13.2 mentions "Weakness Identification" as goal
+   - No implementation provided
+   - Need to define what constitutes a "weakness":
+     - Win rate < 40% in a dimension?
+     - Statistically significant underperformance?
 
-class PermanentError(APIError):
-    pass
-```
+2. **PROMPT.md Requirement:**
+   - "Identifies specific areas of weakness in Gemini effective writing vs its peers"
+   - Need dimension analysis across:
+     - Task types (correspondence, reports, memos)
+     - Formality levels
+     - Emotional contexts
+     - Industry sectors
+     - Job zones
+
+3. **Missing: Weakness Severity Classification:**
+   - Not all weaknesses are equal
+   - Need to weight by:
+     - Frequency (how often does this task type appear?)
+     - Magnitude (how big is the win rate difference?)
+     - Confidence (statistical significance)
 
 ---
 
-## Part 12: PDF Report Generation Simulation
+## 6. TUI Implementation Simulation
 
-#### Issue 12.1: WeasyPrint Dependency Complexity
-**Problem**: WeasyPrint requires system-level dependencies (cairo, pango, etc.) that are complex to install.
-**Impact**: Installation may fail on many systems, especially Windows.
-**Recommendation**: Either:
-1. Add detailed installation instructions per OS
-2. Use alternative like `reportlab` which is pure Python
-3. Make PDF generation optional with graceful fallback to HTML
+### 6.1 Progress Dashboard
 
-#### Issue 12.2: Kaleido Version Compatibility
-**Problem**: kaleido (for plotly image export) has known compatibility issues with certain architectures.
-**Impact**: Chart export may fail silently.
-**Recommendation**: Add fallback to matplotlib:
-```python
-try:
-    img_bytes = fig.to_image(format='png', ...)
-except Exception:
-    # Fallback to matplotlib-based export
-    img_bytes = self._matplotlib_fallback(fig)
-```
+**What Works Well:**
+- Uses textual for TUI (modern, async-friendly)
+- Includes all required PROMPT.md elements:
+  - Overall progress
+  - Per-model-pair progress
+  - Cost tracking
+  - Activity log
+- Interactive controls for pause/quit
 
-#### Issue 12.3: Report Templates Not Provided
-**Problem**: PDF generator uses Jinja2 templates but no template files are provided.
-```python
-template = self.env.get_template(f'{report_type}_report.html')
-```
-**Impact**: Will fail with TemplateNotFound error.
-**Recommendation**: Add template files:
-- `src/reports/templates/comprehensive_report.html`
-- `src/reports/templates/executive_report.html`
-- Include CSS styling for PDF rendering
+**Issues Identified:**
 
----
+1. **Dashboard-Engine Integration Missing:**
+   - `ProgressDashboard` class defined
+   - `EvaluationEngine` mentioned but not implemented
+   - No code showing how engine sends updates to dashboard
+   - Need message passing or shared state
 
-## Part 13: Missing Components and Integration Issues
+2. **Reactive State Updates:**
+   - Uses textual's `reactive` for state
+   - But `update_progress` directly updates UI
+   - Reactivity not being used correctly
 
-### Critical Missing Components
+3. **Model Stats Table Not Populated:**
+   - `on_mount` creates columns but no row updates
+   - Need `update_model_stats` method
 
-#### Issue 13.1: No Main Orchestrator Implementation
-**Problem**: The plan has detailed component code but no main orchestrator that ties everything together.
-**Impact**: No way to actually run an evaluation.
-**Required Code**:
-```python
-class EvalOrchestrator:
-    async def run(self, config: EvalConfig) -> RunResults:
-        # 1. Validation phase
-        # 2. Prompt generation phase
-        # 3. Response collection phase
-        # 4. Judging phase
-        # 5. Analysis phase
-        # 6. Report generation phase
-        pass
-```
+4. **Missing: Error Panel Updates:**
+   - Dashboard shows "Errors & Warnings" panel
+   - But no code to update error counts
+   - Need error tracking integration
 
-#### Issue 13.2: No CLI Entry Point
-**Problem**: Appendix B shows CLI commands but no actual CLI implementation exists.
-**Impact**: Cannot run the system from command line.
-**Recommendation**: Add `src/cli.py` implementation:
-```python
-import typer
-app = typer.Typer()
+5. **ETA Calculation Issue:**
+   - Uses simple linear extrapolation
+   - Doesn't account for:
+     - Rate limit delays
+     - Varying prompt complexity
+     - Model response time differences
 
-@app.command()
-def run(preset: str = "standard", ...):
-    ...
+### 6.2 Results Viewer
 
-@app.command()
-def resume(run_dir: str):
-    ...
-```
+**Issues Identified:**
 
-#### Issue 13.3: No Database Schema Definition
-**Problem**: The plan mentions SQLite storage but doesn't define the actual schema.
-**Impact**: Cannot persist data correctly.
-**Required Tables**:
-```sql
-CREATE TABLE prompts (...);
-CREATE TABLE responses (...);
-CREATE TABLE judgments (...);
-CREATE TABLE aggregated_results (...);
-CREATE TABLE run_metadata (...);
-CREATE TABLE checkpoints (...);
-```
+1. **Stub Implementation:**
+   - `_load_comparisons` and `_get_occupations` are stubs
+   - No actual database loading code
+   - Need full implementation
 
-### Integration Issues
+2. **Filter Integration Missing:**
+   - Filter widgets defined but no `on_change` handlers
+   - `current_filters` dict unused
+   - Need filter->query->table update flow
 
-#### Issue 13.4: Inconsistent ID Types
-**Problem**: Some code uses string IDs (`prompt_id: str`), others use auto-generated hex (`f"prompt_{seed:08x}"`).
-**Impact**: ID mismatches when joining data.
-**Recommendation**: Standardize on UUID4 strings throughout.
+3. **Detail View Implementation:**
+   - `action_view_detail` gets row but doesn't load data
+   - Need to query database for full comparison
+   - Show both responses side-by-side
 
-#### Issue 13.5: No Logging Configuration
-**Problem**: Code uses `logger.info()`, `logger.warning()`, etc. but no logging setup.
-**Impact**: No logs will be produced.
-**Recommendation**: Add structlog configuration in `src/config/logging.py`.
-
-#### Issue 13.6: Missing Type Hints in Some Functions
-**Problem**: Several functions have incomplete type hints:
-- `_generate_all_combinations()` - return type unclear
-- `_parse_enrichment()` - return type unclear
-- `_parse_json_response()` - parameter and return types unclear
-**Recommendation**: Complete all type hints for mypy compatibility.
+4. **Missing: Export from Viewer:**
+   - `action_export` binding defined but no handler
+   - Should export current filtered view
 
 ---
 
-## Part 14: PROMPT.md Compliance Check
+## 7. CLI Interface Simulation
 
-### Features Required But Not Implemented
+**What Works Well:**
+- Uses typer for CLI (modern, type-annotated)
+- All required commands: run, view, compare, export
+- Dry-run cost estimation
 
-| Feature | PROMPT.md Location | Plan Status |
-|---------|-------------------|-------------|
-| Temporal context in prompts | "Include temporal grounding" | Mentioned but no implementation |
-| Mock attachments | "Include mock attachments/references" | Not implemented |
-| Competing objectives | "Include prompts with inherent trade-offs" | Not implemented |
-| Regional English variants | "recipient_english_variant field" | Not in schema |
-| Reply-to context | "Prior messages to respond to" | Partially addressed in RevisionGenerator |
-| Multiple recipients (CC) | "Multiple audiences simultaneously" | Not implemented |
-| Tone matching examples | "Prior writing samples to match" | Not implemented |
-| Sensitive topic tagging | "Track and analyze separately" | Detector mentioned but not integrated |
-| Refusal categorization | "Categorize WHY models refuse" | Not implemented |
-| Constraint compliance checker | "Track compliance separately" | Not implemented |
+**Issues Identified:**
 
-### Recommendation: Add Missing Feature Stubs
+1. **CRITICAL: Preset Loading Bug:**
+   - `config = PRESETS[preset]` - PRESETS is a dict
+   - If preset is int 3, this fails (expects key)
+   - Need `PRESETS[f"preset_{preset}"]` or list indexing
 
-```python
-class TemporalContextGenerator:
-    """Add temporal grounding to prompts."""
-    pass
+2. **Resume Logic Incomplete:**
+   - `resume: Optional[Path]` passed to `EvaluationEngine`
+   - But `EvaluationEngine` constructor not shown
+   - Need to implement resume loading
 
-class AttachmentGenerator:
-    """Generate mock attachments for reference."""
-    pass
+3. **TUI vs No-TUI Integration:**
+   - `no_tui` flag handled but
+   - TUI case just creates dashboard without engine integration
+   - Need proper async coordination
 
-class CompetingObjectivesEnricher:
-    """Add tension/trade-offs to prompts."""
-    pass
+4. **Compare Command Type Hint:**
+   - `run_dirs: list[Path]` - Python 3.9+ syntax
+   - Plan says Python 3.11+ so OK
+   - But `typer.Argument(...)` with list needs special handling
 
-class ReplyToContextGenerator:
-    """Generate prior messages for response prompts."""
-    pass
-
-class MultiRecipientGenerator:
-    """Handle CC/BCC scenarios."""
-    pass
-```
+5. **Missing: Config Validation:**
+   - Custom config could have invalid model IDs
+   - No validation before starting expensive eval
+   - Need `config.validate()` step
 
 ---
 
-## Part 15: Security and Privacy Considerations
+## 8. Configuration and Presets Simulation
 
-#### Issue 15.1: API Key Storage
-**Problem**: API key is expected via environment variable but no guidance on secure storage.
-**Risk**: Keys may be committed to git or logged.
-**Recommendation**:
-1. Add `.env` to `.gitignore`
-2. Mask API key in logs
-3. Consider secrets manager integration for production
+### 8.1 Preset Configurations
 
-#### Issue 15.2: Company/Name Data May Create Privacy Concerns
-**Problem**: Using real company names and generated person names could create legal/privacy issues.
-**Risk**: Generated prompts might inadvertently reference real people.
-**Recommendation**:
-1. Add disclaimer that generated scenarios are fictional
-2. Screen company names against "do not use" list
-3. Add opt-out for real company names in config
+**PROMPT.md Requirement (Table):**
 
-#### Issue 15.3: Response Content Storage
-**Problem**: Model responses are stored indefinitely with no retention policy.
-**Risk**: Sensitive generated content could accumulate.
-**Recommendation**: Add configurable retention policy and PII scanning.
+| Level | Name | Prompts | Models | Judges | Est. Cost |
+|-------|------|---------|--------|--------|-----------|
+| 1 | Sanity Check | 5 | 1 pair | 1x1 vote | ~$1 |
+| ... | ... | ... | ... | ... | ... |
 
----
+**Issues Identified:**
 
-## Part 16: Summary of Critical Issues
+1. **CRITICAL: Presets Not Implemented:**
+   - `src/config/presets.py` mentioned in structure
+   - No actual preset definitions provided
+   - Need 10 preset configurations with correct parameters
 
-### Priority 1: Blocking Issues (Must Fix Before Implementation)
+2. **Cost Estimates Not Validated:**
+   - Table shows ~$500 for Standard Eval (500 prompts)
+   - But this excludes:
+     - Phase 1 offline generation (one-time but huge)
+     - Phase 3 enrichment API calls
+     - Retries on failures
+   - Real costs could be 2-3x higher
 
-1. **Issue 3.2**: async/await mixing bug - will crash at runtime
-2. **Issue 6.1**: Speculative model IDs - will fail API calls
-3. **Issue 7.1**: Missing `_infer_recipient_role()` - will crash
-4. **Issue 8.3**: Missing `_matches_dimension()` - will crash
-5. **Issue 11.3**: Undefined exception classes - will crash
-6. **Issue 13.1**: No orchestrator - cannot run
-7. **Issue 13.3**: No database schema - cannot persist
+3. **Time Estimates Missing Basis:**
+   - "~3 hrs" for Standard Eval
+   - But depends on:
+     - Rate limits (varies by OpenRouter tier)
+     - Parallelization level
+     - Model response times
+   - Need parametric model for estimation
 
-### Priority 2: Significant Issues (Should Fix Before Production)
+### 8.2 Model Configuration
 
-1. **Issue 2.6**: Incomplete BLS/NAICS mapping
-2. **Issue 3.1**: No companies.json data file
-3. **Issue 5.3**: Stratification dimension explosion
-4. **Issue 7.4**: Position shuffle doubles costs (budget surprise)
-5. **Issue 7.6/7.7**: Best-of-5 not implemented correctly
-6. **Issue 10.1**: Unrealistic cost estimates
-7. **Issue 10.2**: Self-preference bias in judges
-8. **Issue 12.3**: No report templates
+**Issues Identified:**
 
-### Priority 3: Quality Issues (Fix When Possible)
+1. **Model ID Verification Needed:**
+   - Plan assumes these OpenRouter model IDs:
+     ```
+     google/gemini-3.0-pro-preview
+     google/gemini-3.0-flash-preview
+     openai/gpt-5.2-thinking-preview
+     openai/gpt-4.1-preview
+     anthropic/claude-opus-4.5-20251101
+     anthropic/claude-sonnet-4-20250514
+     ```
+   - Date is Jan 6, 2026 - these are FUTURE model versions
+   - Need to verify actual OpenRouter model IDs at runtime
+   - Should have fallback/alias mechanism
 
-1. **Issue 4.1**: Limited name diversity
-2. **Issue 4.2**: Age/generation not connected to names
-3. **Issue 5.6**: Temperature too high for enrichment
-4. **Issue 8.1**: Deprecated scipy function
-5. **Issue 8.2**: Incorrect correlation calculation
-6. **Issue 9.2**: Textual API compatibility
+2. **Flash-Tier Models Incomplete:**
+   - PROMPT.md: "Other flash-tier models in class"
+   - Only GPT-4.1 and Claude Sonnet included
+   - Missing potential options:
+     - Gemini Flash Thinking?
+     - Llama-based flash models?
+     - Other frontier flash models?
 
-### Priority 4: Missing Features (Per PROMPT.md)
-
-1. Temporal context generation
-2. Mock attachment generation
-3. Competing objectives
-4. Regional English variants
-5. Reply-to context
-6. Multiple recipients (CC)
-7. Tone matching
-8. Sensitive topic tagging
-9. Refusal categorization
-10. Constraint compliance checking
+3. **Judge Model Constraints:**
+   - Judges include Gemini 3 Pro
+   - But Gemini is being EVALUATED
+   - Potential conflict of interest?
+   - PROMPT.md explicitly lists this, so intentional for robustness
+   - But should track "self-judging" in bias analysis
 
 ---
 
-## Part 17: Recommended Implementation Order
+## 9. Report Generation Simulation
 
-Based on this simulation, the recommended implementation order is:
+### 9.1 PDF Report
 
-### Phase 1: Foundation (Week 1-2)
-1. Fix all Priority 1 blocking issues
-2. Create database schema
-3. Implement main orchestrator skeleton
-4. Add CLI entry point
-5. Define all exception classes
-6. Verify O*NET schema against actual database
+**PROMPT.md Requirements:**
+1. Comprehensive Dashboard
+2. Deep Statistical Analysis
+3. Executive Summary
 
-### Phase 2: Core Pipeline (Week 3-4)
-1. Implement O*NET extraction with verified schema
-2. Create companies.json with real company data
-3. Add complete NAICS mapping for all SOC codes
-4. Fix async/await issues in company database
-5. Implement name generator with larger pools
+**Issues Identified:**
 
-### Phase 3: Prompt Generation (Week 5-6)
-1. Reduce stratification to 4-5 dimensions
-2. Fix format string issues in enrichment
-3. Add word count tier assignment
-4. Implement missing feature generators (temporal, attachments, etc.)
+1. **PDF Generator Not Implemented:**
+   - `src/reports/pdf_generator.py` in structure
+   - No implementation provided
+   - Need to choose: reportlab vs weasyprint
+   - weasyprint requires wkhtmltopdf system dependency
 
-### Phase 4: Evaluation (Week 7-8)
-1. Implement proper best-of-5 judging
-2. Add position bias mitigation instruction to judge prompts
-3. Fix vote aggregation to match PROMPT.md spec
-4. Implement constraint compliance checker
-5. Update cost estimates with accurate calculations
+2. **Chart Generation Incomplete:**
+   - `charts.py` and `heatmaps.py` mentioned
+   - No implementation
+   - Need:
+     - Win rate bar charts by dimension
+     - Heatmaps (occupation x formality)
+     - Confidence interval plots
+     - Time series of running win rate
 
-### Phase 5: Analysis and Reporting (Week 9-10)
-1. Fix deprecated scipy functions
-2. Correct length bias calculation
-3. Implement missing analysis methods
-4. Create report templates
-5. Add WeasyPrint installation instructions or fallback
+3. **Executive Summary Content:**
+   - What key metrics to highlight?
+   - How to identify "top weaknesses"?
+   - Actionable recommendations - who generates these?
 
-### Phase 6: Polish and Testing (Week 11-12)
-1. Add comprehensive test coverage
-2. Pin dependency versions
-3. Add security measures
-4. Write documentation
-5. End-to-end integration testing
+4. **Missing: Auto-Generated README:**
+   - `readme_generator.py` mentioned
+   - No implementation
+   - Should include:
+     - Run configuration summary
+     - How to resume if incomplete
+     - How to regenerate report
 
 ---
 
-## Conclusion
+## 10. Special Prompt Types Simulation
 
-This simulation identified **47 distinct issues** across 17 categories. Of these:
-- **7 are blocking** and will cause immediate crashes
-- **8 are significant** and will cause incorrect results or budget overruns
-- **9 are quality issues** that affect reliability or user experience
-- **10 are missing features** explicitly required by PROMPT.md
+### 10.1 Constraint Generator
 
-The master plan provides excellent architectural direction and comprehensive component design. However, significant implementation work remains, particularly around:
-1. Completing stub implementations
-2. Creating required data files
-3. Fixing integration issues between components
-4. Aligning judging methodology with PROMPT.md specification
+**What Works Well:**
+- Good variety of constraint types
+- Measurable constraints (word counts, bullet counts)
+- Probability-based application
 
-With the recommended implementation order and fixes, the framework should be production-ready in approximately 10-12 weeks.
+**Issues Identified:**
+
+1. **Constraint Verification Not Automated:**
+   - `ConstraintSpec.measurable = True` but
+   - No code to actually measure compliance
+   - Need `compliance_tracker.py` implementation
+   - How to count words/bullets/sentences programmatically?
+
+2. **Conflicting Constraints Possible:**
+   - Could randomly select both:
+     - "Keep this under 100 words"
+     - "This should be comprehensive, at least 500 words"
+   - Need mutual exclusion rules
+
+3. **Tone Constraints Hard to Verify:**
+   - "Be direct and avoid pleasantries"
+   - How to automatically verify?
+   - Need NLP or LLM-based verification
+
+### 10.2 Revision Tasks
+
+**Issues Identified:**
+
+1. **"concise" Revision Type Incomplete:**
+   - `templates = None` for this type
+   - Comment says "Will use LLM to generate verbose version"
+   - But no implementation of this LLM call
+   - Need Phase 3 integration
+
+2. **Draft Quality Inconsistent:**
+   - CASUAL_DRAFTS use "lemme", "thx"
+   - But same casual level regardless of formality setting
+   - Need formality-matched drafts
+
+3. **Revision Task Prompt Format:**
+   - `_build_prompt_text` doesn't handle revision tasks specially
+   - Need different prompt structure:
+     ```
+     Original message:
+     [draft]
+
+     Please revise this to: [instruction]
+     ```
+
+### 10.3 CC/Multiple Recipients
+
+**Issues Identified:**
+
+1. **CC Scenario Selection Random:**
+   - `self.rng.choice(self.CC_SCENARIOS)`
+   - But scenarios should match prompt context
+   - "vendor_cc_legal" doesn't make sense for all occupations
+
+2. **Mixed Audience Handling:**
+   - `mixed_audience_note` tells model about audience mix
+   - But doesn't affect judge evaluation criteria
+   - Judges should know to evaluate for mixed audience
 
 ---
 
-*End of Simulation Report*
+## 11. PROMPT.md Compliance Check
+
+### Requirements Verified as Covered:
+- [x] O*NET task-level granularity
+- [x] NAICS-based industry sampling
+- [x] Real company names (mentioned, not implemented)
+- [x] Realistic names for people
+- [x] Temporal context
+- [x] Attachment handling
+- [x] Competing objectives
+- [x] Regional English variants (field exists)
+- [x] Reply-to context
+- [x] Multiple recipients/CC
+- [x] Tone matching
+- [x] Revision tasks
+- [x] Ambiguity handling
+- [x] Instruction-following tests
+- [x] Dual judge personas
+- [x] Multiple judge models
+- [x] Majority-of-majorities voting
+- [x] Position bias mitigation
+- [x] Checkpoint/resume
+- [x] Live progress TUI
+- [x] Results viewer TUI
+- [x] PDF report
+
+### Requirements NOT Fully Addressed:
+
+1. **"Let O*NET data drive diversity programmatically"**
+   - Plan uses ONET_WRITING_REFERENCE.md but format undefined
+   - Still some hardcoded categories in code examples
+
+2. **"Store company metadata: size, age, public/private, HQ location"**
+   - CompanyContext has size, is_public
+   - Missing: age (founding year), HQ location
+
+3. **"Model Tiers: Flash vs Flash-tier"**
+   - Flash-tier comparison incomplete
+   - Only 2 flash-tier models listed
+
+4. **"10 preset configurations"**
+   - Mentioned in table but not implemented
+
+5. **"Cross-Run Comparison"**
+   - `cross_run_compare.py` mentioned
+   - No implementation provided
+
+6. **"Include temporal grounding where relevant... Do NOT include temporal context for tasks where it's irrelevant"**
+   - Current implementation adds temporal randomly (20%)
+   - Should be task-relevance-based
+
+---
+
+## 12. Summary of Critical Issues
+
+### Must Fix Before Implementation:
+
+1. **ONET_WRITING_REFERENCE.md format undefined** - Cannot implement O*NET extractor
+2. **OpenRouter model IDs unverified** - Evaluation may fail at runtime
+3. **Phase 1 generation cost not estimated** - Budget could be 2-3x higher
+4. **Company and name databases missing** - Cannot generate realistic prompts
+5. **Presets not implemented** - CLI will crash
+6. **Dashboard-engine integration missing** - TUI won't update
+7. **Response analyzer not implemented** - Cannot detect patterns/refusals
+8. **Compliance verification not implemented** - Cannot track instruction-following
+
+### Should Fix for Robustness:
+
+1. **JSON parsing fragility** - LLM responses vary in format
+2. **Judge response parsing fragility** - Same issue
+3. **Checkpoint file growth** - May hit filesystem limits
+4. **Multiple comparisons problem** - Statistical validity at risk
+5. **Bias detection data requirements** - Missing fields in schema
+6. **Weakness analysis undefined** - Core goal not implemented
+
+### Nice to Have:
+
+1. **Confidence weighting in vote aggregation**
+2. **Power analysis for sample size**
+3. **More comprehensive bias detection**
+4. **Constraint conflict prevention**
+5. **Context-appropriate CC scenarios**
+
+---
+
+## 13. Recommendations for Master Plan Improvement
+
+1. **Define ONET_WRITING_REFERENCE.md Format**
+   - Add schema definition
+   - Show example entries
+   - Explain how it was generated
+
+2. **Verify OpenRouter Model IDs**
+   - Add verification step in implementation
+   - Include fallback model IDs
+   - Document how to update for new models
+
+3. **Implement All Missing Components**
+   - Company database with real data
+   - Name generator with Census data
+   - All 10 presets
+   - Weakness finder
+   - Compliance tracker
+   - Response analyzer
+
+4. **Add Cost Model for Phase 1**
+   - Document one-time offline generation cost
+   - Option to skip if offline_variations exists
+   - Incremental generation for new tasks only
+
+5. **Fix Data Dependencies**
+   - Add missing fields to database schema
+   - Ensure all analysis components have required data
+
+6. **Add Integration Documentation**
+   - How engine connects to TUI
+   - How phases coordinate
+   - How resume actually works
+
+7. **Address Statistical Issues**
+   - Add power analysis
+   - Implement FDR correction
+   - Define "weakness" criteria mathematically
+

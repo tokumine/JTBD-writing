@@ -924,17 +924,19 @@ Launch 6 parallel OPUS sub-agents with identical prompts. Each sub-agent:
 
 Launch 6 parallel OPUS sub-agents. Each sub-agent:
 - Reads PROMPT.md AND their assigned draft (`plans/draft_plan_N.md`)
-- Critiques for correctness, robustness, errors, missed details, poor decisions
-- Writes improved version to: `plans/critique_N.md`
+- Critiques for correctness, robustness, errors, missed details, poor decisions, completeness vs PROMPT.md
+- Writes detailed critique and improved version to: `plans/critique_N.md`
 - Returns ONLY: `Done. Output: plans/critique_N.md`
+- The plan must contain 100% of the specification in PROMPT.md
 
 **Orchestrator action:** Launch 6 Task agents in parallel.
 
 ### Stage 3: Master Plan Synthesis
 
 Launch 1 OPUS sub-agent:
-- Reads PROMPT.md AND all 6 critique files
-- Synthesizes a master plan considering agreements, disagreements, risks, open questions
+- Reads PROMPT.md AND all 6 draft plans AND their respective critique files
+- Synthesizes a master plan considering draft plans, agreements, disagreements, risks, open questions
+- The plan must contain 100% of the specification in PROMPT.md
 - Writes to: `plans/master_plan_draft.md`
 - Returns ONLY: `Done. Output: plans/master_plan_draft.md`
 
@@ -944,7 +946,7 @@ Launch 1 OPUS sub-agent:
 
 Launch 6 parallel OPUS sub-agents with identical prompts. Each sub-agent:
 - Reads PROMPT.md AND `plans/master_plan_draft.md`
-- Simulates implementing the entire plan in detail (dry run)
+- Simulates implementing the entire master plan in detail (dry run)
 - Documents what works, what doesn't, missing pieces, gotchas
 - Writes to: `plans/simulation_N.md`
 - Returns ONLY: `Done. Output: plans/simulation_N.md`
@@ -955,7 +957,7 @@ Launch 6 parallel OPUS sub-agents with identical prompts. Each sub-agent:
 
 Launch 1 OPUS sub-agent:
 - Reads PROMPT.md, `plans/master_plan_draft.md`, AND all 6 simulation files
-- Produces the final improved master plan
+- Produces the final improved and COMPLETE master plan, ensuring that the plan contains 100% of the specification in PROMPT.md
 - Writes to: `plans/master_plan_final.md`
 - Returns ONLY: `Done. Output: plans/master_plan_final.md`
 

@@ -1,2897 +1,2140 @@
-# Gemini Writing Evaluation Framework - Improved Implementation Plan
+# Critique of Draft Plan 4: Gemini Writing Evaluation Framework
 
-## Critical Analysis of Original Draft
+## Executive Summary
 
-### Issues Identified in Draft Plan 4
+Draft Plan 4 provides a comprehensive and well-structured implementation plan for the Gemini Writing Evaluation Framework. It demonstrates strong technical architecture, thoughtful design decisions, and extensive code examples. However, there are several critical gaps, technical inaccuracies, and areas requiring improvement when compared against the PROMPT.md specification.
 
-#### 1. **Hardcoded Writing Categories (PROMPT.md Violation)**
-The original plan hardcodes `WritingCategory` enum with 10 fixed categories (EXPLICIT_WRITING, CORRESPONDENCE, etc.). PROMPT.md explicitly states: "**IMPORTANT: Avoid hardcoding specific categories and types of effective writing where possible.** Let the O*NET data drive this diversity programmatically rather than pre-defining categories."
-
-**Fix**: Remove hardcoded categories. Use O*NET task text directly and let LLM-based enrichment infer task characteristics dynamically.
-
-#### 2. **Missing Instruction-Following Test Implementation**
-The schema includes `explicit_constraints` but the draft provides no implementation for:
-- Generating prompts WITH specific constraints ("Keep under 100 words", "Use exactly 3 bullet points")
-- Tracking constraint compliance separately in evaluation
-- Reporting instruction-following rates
-
-**Fix**: Add constraint generation in Phase 2/3 and compliance checking in judging.
-
-#### 3. **Incomplete Revision/Editing Task Support**
-PROMPT.md requires: "Include prompts where the model must improve existing text" (revise, soften tone, make more concise, etc.). The draft has no implementation for generating these.
-
-**Fix**: Add revision task generation in the prompt pipeline.
-
-#### 4. **Missing Tone Matching Implementation**
-The schema has `tone_example` but no generation logic. PROMPT.md requires prompts that include "prior writing samples to match" the tone of.
-
-**Fix**: Implement tone example generation in Phase 3.
-
-#### 5. **Missing Multiple Recipients (CC) Logic**
-The schema has `cc_recipients` but there's no generation logic for CC scenarios that test "ability to navigate tone for mixed audiences."
-
-**Fix**: Add CC scenario generation with appropriate audience mixing.
-
-#### 6. **Inadequate Cost Estimation Implementation**
-The draft shows `estimate_cost()` being called but provides no implementation. Cost estimation needs to:
-- Use current OpenRouter pricing
-- Account for input/output token differences
-- Calculate judge call costs separately
-- Provide ranges (low/high)
-
-**Fix**: Implement detailed cost estimation with model-specific pricing.
-
-#### 7. **Judge Context Missing Critical Details**
-PROMPT.md states judges need: "The writer persona details (age, skill level, role, industry, generation)" but the judge prompts in the draft only show basic name/title information, missing age, generation, skill level which are critical for authenticity assessment.
-
-**Fix**: Expand judge prompts to include full persona context.
-
-#### 8. **Missing Regional English Variant Handling**
-The schema tracks `english_variant` but there's no logic to:
-- Generate prompts with non-US English contexts
-- Include international recipients (British, Australian, non-native speakers)
-- Analyze results by language variant
-
-**Fix**: Add variant generation and tracking in analysis.
-
-#### 9. **Incomplete Ambiguity Handling**
-PROMPT.md requires deliberately vague prompts and tracking of how models handle uncertainty. The schema has `is_deliberately_vague` but no generation logic or behavior tracking.
-
-**Fix**: Implement ambiguous prompt generation and response classification.
-
-#### 10. **Missing Response Metadata Tracking**
-PROMPT.md requires tracking: response length, format detection (bullets, headers, paragraphs), greeting/sign-off patterns. The draft stores tokens but not these structural elements.
-
-**Fix**: Add response structure analysis.
-
-#### 11. **Database Schema Mismatch**
-The SQLite schema doesn't include a `prompts` table, but `WeaknessFinder` tries to join with it. Also missing indexes for common query patterns.
-
-**Fix**: Complete the database schema with proper joins and indexes.
-
-#### 12. **Incomplete O*NET Reference Usage**
-The draft doesn't reference `db/ONET_REFERENCE.md` which PROMPT.md says contains pre-processed writing tasks guidance from Opus.
-
-**Fix**: Integrate ONET_REFERENCE.md guidance.
-
-#### 13. **Missing Cross-Run Comparison**
-The draft mentions `./eval compare` in the CLI but provides no implementation.
-
-**Fix**: Implement cross-run comparison functionality.
-
-#### 14. **OpenRouter Model IDs Likely Incorrect**
-The model IDs use speculative naming (e.g., 'google/gemini-3.0-pro'). These need verification or dynamic lookup.
-
-**Fix**: Add model ID verification/discovery.
+**Overall Assessment: 7.5/10** - Solid foundation with good architecture but missing critical features and contains implementation flaws.
 
 ---
 
-## Part 1: Improved System Architecture
+## Part 1: Critical Issues and Gaps
 
-### 1.1 High-Level Architecture
+### 1.1 MISSING: Reference to ONET_WRITING_REFERENCE.md
 
-```
-+------------------------------------------------------------------+
-|                    GEMINI WRITING EVAL FRAMEWORK                   |
-+------------------------------------------------------------------+
-|                                                                    |
-|  +-------------------+    +--------------------+    +------------+ |
-|  |   Data Layer      |--->|   Prompt Engine    |--->|  Eval Core | |
-|  | O*NET + Companies |    | 3-Phase + Variants |    |  (SxS)     | |
-|  +-------------------+    +--------------------+    +------------+ |
-|          |                        |                      |         |
-|          v                        v                      v         |
-|  +-------------------+    +--------------------+    +------------+ |
-|  | ONET_REFERENCE.md |    | Diversity Sampler  |    | Judge Panel| |
-|  | Writing Task Guide|    | (No hardcoding)    |    | (Ensemble) | |
-|  +-------------------+    +--------------------+    +------------+ |
-|                                                          |         |
-|                               +--------------------------|         |
-|                               v                          v         |
-|  +-------------------+    +--------------------+    +------------+ |
-|  |   Results DB      |<---|   Response Analyzer|<---| Vote Agg   | |
-|  | SQLite + Prompts  |    |  (Structure/Meta)  |    | Maj-of-M   | |
-|  +-------------------+    +--------------------+    +------------+ |
-|          |                        |                                |
-|          v                        v                                |
-|  +-------------------+    +--------------------+    +------------+ |
-|  |   TUI Viewer      |    |   Analysis Engine  |    | Cross-Run  | |
-|  |   (Textual)       |    |  Stats/Bias/Weak   |    | Comparator | |
-|  +-------------------+    +--------------------+    +------------+ |
-|          |                        |                                |
-|          v                        v                                |
-|  +-------------------+    +--------------------+                   |
-|  | Progress Dashboard|    |   PDF Reporter     |                   |
-|  | Live + Keybinds   |    |  Full Analyst Rpt  |                   |
-|  +-------------------+    +--------------------+                   |
-+------------------------------------------------------------------+
+**PROMPT.md Requirement:**
+> "OPUS has pre-processed all the tasks where effective writing might be needed and written a guide in db/ONET_WRITING_REFERENCE.md"
+
+**Issue:** The draft plan hardcodes writing categories in `ONetExtractor.WRITING_CATEGORIES` instead of reading from the pre-processed reference document. This ignores the work already done to identify writing-relevant tasks and violates the principle of letting O*NET data drive diversity.
+
+**Fix Required:** The implementation should read from `db/ONET_WRITING_REFERENCE.md` rather than defining its own categorization.
+
+### 1.2 MISSING: LLM Enrichment Phase 3 Implementation
+
+**PROMPT.md Requirement:**
+> "Phase 3 - LLM Enrichment: Further enrich with LLM where context-heavy prompts require additional detail or realism."
+
+**Issue:** The `_enrich_prompts` method is a placeholder that returns prompts unchanged:
+```python
+def _enrich_prompts(self, prompts: List[WritingPrompt]) -> List[WritingPrompt]:
+    """Phase 3: LLM enrichment for complex prompts."""
+    return prompts  # Placeholder
 ```
 
-### 1.2 Core Components (Improved)
+This critical feature is completely unimplemented.
 
-| Component | Technology | Purpose | Improvements |
-|-----------|------------|---------|--------------|
-| **Data Layer** | SQLite + Python | O*NET access, results | Includes prompts table, proper joins |
-| **ONET Reference** | Markdown parser | Use Opus's pre-analysis | NEW: Integrate guidance |
-| **Prompt Engine** | Python + Pydantic | Three-phase generation | No hardcoded categories, revision tasks |
-| **Diversity Sampler** | Pure Python | Even distribution | Dynamic dimension inference |
-| **Eval Core** | asyncio + httpx | Parallel API calls | Verified model IDs |
-| **Response Analyzer** | Python + regex | Structure detection | NEW: Format/pattern analysis |
-| **Judge Panel** | OpenRouter API | Ensemble judging | Full persona context in prompts |
-| **Vote Aggregator** | Pure Python | Majority-of-majorities | Unchanged |
-| **Analysis Engine** | pandas + scipy | Statistics | Regional variant analysis |
-| **Cross-Run Comparator** | Python | Multi-run analysis | NEW: Compare results across runs |
-| **TUI Viewer** | Textual (rich) | Results exploration | Unchanged |
-| **PDF Reporter** | WeasyPrint | Final report | Executive + comprehensive |
-| **Progress Dashboard** | Textual | Live monitoring | Unchanged |
+**Fix Required:** Full implementation of LLM enrichment including:
+- Attachment generation (mock Q3 reports, meeting notes, resumes, etc.)
+- Prior message generation for reply-to contexts
+- Tone example generation for tone-matching scenarios
+- Temporal context additions (dates, deadlines, recent events)
+- Competing objectives elaboration
 
-### 1.3 Improved Directory Structure
+### 1.3 MISSING: Phase 1 Offline LLM Generation
+
+**PROMPT.md Requirement:**
+> "Phase 1 - Offline LLM Generation: Use an LLM to generate diverse persona/context variations for each O*NET task. This is done as an offline preprocessing step."
+
+**Issue:** Phase 1 is mentioned but not implemented. The plan jumps directly to algorithmic combinations without the offline LLM pre-generation step that should create diverse persona variations before runtime.
+
+**Fix Required:** Implement the offline LLM generation step including:
+- Persona variation generation
+- Context variation generation
+- Storage of pre-generated variations for runtime use
+- Using evaluated models for generation (as specified)
+
+### 1.4 MISSING: Instruction-Following Tests
+
+**PROMPT.md Requirement:**
+> "Include some prompts with explicit constraints to test instruction-following:
+> - Length constraints: 'Keep this under 100 words'
+> - Format requirements: 'Use exactly 3 bullet points'
+> - Tone directives: 'Be direct and avoid pleasantries'
+> - Exclusions: 'Do not mention the budget'"
+
+**Issue:** While `InstructionConstraint` is defined in the schema, there's no implementation that:
+- Generates prompts with these constraints
+- Verifies compliance after response generation
+- Tracks instruction-following separately in analysis
+
+**Fix Required:**
+- Add constraint generation logic in prompt generator
+- Implement compliance checking module
+- Track instruction-following metrics separately from quality judgments
+
+### 1.5 INCOMPLETE: Refusal Categorization
+
+**PROMPT.md Requirement:**
+> "Categorize WHY models refuse for deeper analysis:
+> - Safety refusal: Model cites safety/policy concerns
+> - Capability limitation: Model says it can't do the task
+> - Misunderstanding: Model interprets task incorrectly
+> - Incomplete response: Model starts but doesn't finish
+> - Off-topic: Model responds but not to the actual task"
+
+**Issue:** The plan mentions auto-loss for failures but doesn't implement categorization of refusal types. Only generic error logging exists.
+
+**Fix Required:**
+- Implement refusal detection logic
+- Add categorization of refusal types
+- Track refusal rates by model and task type
+- Include refusal analysis in reporting
+
+### 1.6 MISSING: Response Metadata Tracking
+
+**PROMPT.md Requirement:**
+> "Track metadata for every response:
+> - Response length (characters, words, tokens)
+> - Response time (latency)
+> - Format detection (bullet points, headers, paragraphs)
+> - Greeting/sign-off patterns"
+
+**Issue:** Only basic metrics (tokens, latency) are tracked. Critical analysis features are missing:
+- Format detection (bullet points, headers, numbered lists)
+- Greeting pattern detection ("I hope this email finds you well", etc.)
+- Sign-off pattern detection
+- Word/character counts separate from tokens
+
+**Fix Required:** Add comprehensive response analysis module with:
+```python
+class ResponseAnalyzer:
+    def analyze(self, response: str) -> ResponseMetadata:
+        return ResponseMetadata(
+            char_count=len(response),
+            word_count=len(response.split()),
+            has_bullet_points=self._detect_bullets(response),
+            has_headers=self._detect_headers(response),
+            has_numbered_list=self._detect_numbered(response),
+            greeting_type=self._detect_greeting(response),
+            signoff_type=self._detect_signoff(response),
+            cliche_patterns=self._detect_cliches(response)
+        )
+```
+
+### 1.7 INCOMPLETE: Systematic Bias Detection
+
+**PROMPT.md Requirement:**
+> "Report all detected biases with statistical significance:
+> - Formality drift: Does one model skew formal/casual regardless of prompt?
+> - Model fingerprinting: Can judges identify which model wrote which response?"
+
+**Issue:** Bias detection implementation covers position and length bias, but misses:
+- Formality drift detection
+- Model fingerprinting detection
+- Format bias (does one model overuse bullet points?)
+
+**Fix Required:** Extend `BiasDetector` class with these additional bias types.
+
+### 1.8 INCOMPLETE: Results Directory Structure
+
+**PROMPT.md Requirement:** Detailed results directory structure with specific subdirectories and files.
+
+**Issue:** The plan doesn't fully implement the required structure. Missing:
+- `prompts/prompts_by_occupation/`
+- `prompts/prompts_by_industry/`
+- `responses/by_prompt/`
+- `responses/by_model/`
+- `judgments/raw/`
+- `judgments/aggregated/`
+- `analysis/weakness_analysis.json`
+- `reports/executive_summary.md`
+- `reports/charts/`
+- `logs/run.log`
+- `logs/timing.log`
+- `README.md` (auto-generated)
+
+**Fix Required:** Implement full directory structure with all required organization.
+
+### 1.9 MISSING: Cross-Run Comparison Implementation
+
+**PROMPT.md Requirement:**
+> "Support comparing results across multiple runs"
+
+**Issue:** The CLI has a `compare` command but it's not implemented:
+```python
+def compare(results_dirs):
+    console.print(f"Comparing {len(results_dirs)} runs...")
+    # Implementation for cross-run comparison
+```
+
+**Fix Required:** Full implementation of cross-run comparison with statistical analysis.
+
+### 1.10 MISSING: Weakness Analysis Implementation
+
+**PROMPT.md Requirement:**
+> "Identifies specific areas of weakness in Gemini effective writing vs its peers"
+
+**Issue:**
+- `weakness_finder.py` is listed in project structure but not implemented
+- `_create_weakness_analysis` in PDF generator is empty
+- No systematic weakness identification logic
+
+**Fix Required:** Implement comprehensive weakness analysis:
+- By occupation type
+- By writing task category
+- By formality level
+- By demographic segment
+- By communication channel
+- Statistical significance of weaknesses
+
+---
+
+## Part 2: Technical Issues and Bugs
+
+### 2.1 Bug: Duplicate Response Token Saving
+
+**Issue in database.py:**
+```python
+cursor.execute("""
+    INSERT INTO responses (prompt_id, model, response_text, input_tokens,
+                          output_tokens, latency_ms, cost, finish_reason)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+""", (
+    outcome.prompt_id,
+    outcome.gemini_model,
+    outcome.gemini_response,
+    outcome.metadata.get('gemini_tokens', 0),
+    outcome.metadata.get('gemini_tokens', 0),  # BUG: Same value for input and output!
+    ...
+))
+```
+
+Both `input_tokens` and `output_tokens` are set to `gemini_tokens`. This is incorrect.
+
+**Fix:** Track input and output tokens separately in metadata.
+
+### 2.2 Bug: Incorrect Cost Splitting
+
+**Issue:** Cost is divided by 2 for each response:
+```python
+outcome.metadata.get('total_cost', 0) / 2
+```
+
+This assumes equal cost for both models, which is incorrect given different model pricing.
+
+**Fix:** Track cost per model separately.
+
+### 2.3 Issue: Synchronous Database Operations in Async Context
+
+**Issue:** The database methods are marked as `async` but use synchronous SQLite operations:
+```python
+async def save_prompt(self, prompt) -> None:
+    cursor = self.conn.cursor()
+    cursor.execute(...)  # Synchronous!
+```
+
+This blocks the event loop.
+
+**Fix:** Use `aiosqlite` for true async database operations:
+```python
+import aiosqlite
+
+class ResultsDatabase:
+    async def save_prompt(self, prompt) -> None:
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute(...)
+            await conn.commit()
+```
+
+### 2.4 Issue: Rate Limiter Not Per-Model
+
+**Issue:** The rate limiter is global across all models, but different models have different rate limits.
+
+**Fix:** Implement per-model rate limiting:
+```python
+class PerModelRateLimiter:
+    def __init__(self):
+        self._request_times: Dict[str, List[datetime]] = {}
+        self._limits: Dict[str, int] = {
+            'gemini-3-pro': 60,
+            'gpt-5.2-thinking': 30,
+            # etc.
+        }
+```
+
+### 2.5 Issue: Thread Safety in TUI
+
+**Issue:** The evaluation runs in a separate thread but updates TUI state without proper synchronization:
+```python
+eval_thread = threading.Thread(
+    target=lambda: asyncio.run(
+        engine.run_evaluation(prompts, progress_callback)
+    )
+)
+```
+
+This can cause race conditions when updating reactive state.
+
+**Fix:** Use proper message passing or thread-safe queues between evaluation thread and TUI.
+
+### 2.6 Issue: Company Email Generation Unsafe
+
+**Issue:**
+```python
+email=f"{writer_name.email_style}@{company.name.lower().replace(' ', '').replace(',', '')}.com"
+```
+
+This doesn't handle:
+- Special characters (& in "Johnson & Johnson")
+- International characters
+- Multiple word names with various separators
+
+**Fix:** Implement proper domain sanitization:
+```python
+def sanitize_domain(name: str) -> str:
+    import re
+    # Remove special chars, normalize
+    clean = re.sub(r'[^a-zA-Z0-9]', '', name.lower())
+    return clean[:63]  # DNS label limit
+```
+
+### 2.7 Issue: Hash for Randomization Not Portable
+
+**Issue:**
+```python
+rng = random.Random(hash(prompt_id))
+```
+
+`hash()` returns different values across Python sessions (unless PYTHONHASHSEED is set).
+
+**Fix:** Use hashlib for deterministic hashing:
+```python
+import hashlib
+seed = int(hashlib.md5(prompt_id.encode()).hexdigest()[:8], 16)
+rng = random.Random(seed)
+```
+
+### 2.8 Issue: Missing Error Handling in Judgment Parsing
+
+**Issue:** `_parse_judgment` has minimal error handling:
+```python
+def _parse_judgment(self, response: str) -> tuple:
+    lines = response.strip().split('\n')
+    winner = 'tie'
+    # ...parsing without validation
+```
+
+If the model returns malformed output, parsing silently fails and defaults to 'tie'.
+
+**Fix:** Add robust parsing with validation and fallback strategies.
+
+---
+
+## Part 3: Design Issues and Suboptimal Approaches
+
+### 3.1 Company Database Scalability
+
+**Issue:** All companies are hardcoded in Python. This:
+- Limits diversity
+- Makes updates difficult
+- Inflates code size
+
+**Fix:** Store companies in JSON/CSV file or SQLite table.
+
+### 3.2 Name Generator Ethnicity Categories
+
+**Issue:** The name generator uses explicit ethnicity categories which could:
+- Be culturally insensitive
+- Miss many ethnic groups
+- Create stereotypical associations
+
+**Better Approach:** Use a larger, more diverse name pool without explicit ethnic categorization, or use census-based distribution.
+
+### 3.3 Missing Caching for O*NET Queries
+
+**Issue:** Every prompt generation queries the O*NET database repeatedly.
+
+**Fix:** Cache extracted tasks after first query.
+
+### 3.4 No Batching for API Calls
+
+**Issue:** Judgments are collected one at a time in a loop:
+```python
+for judge_model in judge_models:
+    for persona in personas:
+        for vote_idx in range(votes_per_judge):
+            judgment = await self.judge_manager.get_judgment(...)
+```
+
+**Fix:** Use `asyncio.gather` for parallel judgment collection within rate limits.
+
+### 3.5 PDF Generation Library Choice
+
+**Issue:** Uses ReportLab which is complex and produces basic output.
+
+**Better Alternative:** Consider `weasyprint` (already listed in tech stack) which allows HTML/CSS-based PDF generation for better styling.
+
+---
+
+## Part 4: Missing PROMPT.md Features (Additional)
+
+### 4.1 Multiple Recipients (CC Situations)
+
+**PROMPT.md Requirement:**
+> "Include scenarios with multiple audiences simultaneously:
+> - Email to client, CC'd to your boss
+> - Team announcement that external partners will also see"
+
+**Issue:** Schema has `cc_recipients` but no generation logic for CC scenarios.
+
+### 4.2 Revision & Editing Tasks
+
+**PROMPT.md Requirement:**
+> "Include prompts where the model must improve existing text:
+> - 'Revise this draft to be more concise'
+> - 'Make this email more professional'"
+
+**Issue:** Schema has `existing_draft` and `is_revision_task` but no implementation.
+
+### 4.3 Ambiguity Handling Tracking
+
+**PROMPT.md Requirement:**
+> "Include deliberately vague prompts and track:
+> - Does it make reasonable assumptions?
+> - Does it ask for clarification?
+> - Does it hedge appropriately?
+> - Does it hallucinate specific details?"
+
+**Issue:** Schema has `is_ambiguous` but no tracking of model behavior for ambiguous prompts.
+
+### 4.4 Sensitive Topic Tracking
+
+**PROMPT.md Requirement:** Track and analyze sensitive topics separately.
+
+**Issue:** `is_sensitive` and `sensitive_category` exist but:
+- No separate win rate tracking for sensitive tasks
+- No analysis of how models handle difficult communications
+- No tracking of refusal patterns for sensitive content
+
+### 4.5 Interactive TUI Controls
+
+**PROMPT.md Requirement:**
+> "Interactive controls: q (quit), p (pause), d (detail view), s (statistics), h (help), arrow keys (scroll)"
+
+**Issue:** Bindings exist but implementations are stubs:
+```python
+def action_pause(self) -> None:
+    self.log_activity("Evaluation paused...")  # Doesn't actually pause!
+
+def action_detail(self) -> None:
+    pass  # Would switch to detail view
+```
+
+### 4.6 Live Cost Tracking
+
+**PROMPT.md Requirement:** Real-time cost tracking during evaluation.
+
+**Issue:** Cost tracking exists in estimate but actual spent-so-far tracking during runs is incomplete.
+
+### 4.7 CSV Export
+
+**PROMPT.md Requirement:**
+> "Allow exports to CSV"
+
+**Issue:** `exporter.py` is listed in project structure but not implemented.
+
+### 4.8 Judge Agreement Display
+
+**PROMPT.md Requirement:** Show inter-judge agreement (Cohen's Kappa) in progress dashboard.
+
+**Issue:** Kappa calculation exists in statistics but not wired to TUI display.
+
+---
+
+## Part 5: Strengths of the Draft Plan
+
+Despite the issues identified above, Draft Plan 4 has several notable strengths:
+
+### 5.1 Excellent Architecture
+- Clean modular design with clear separation of concerns
+- Well-organized project structure
+- Appropriate use of Python best practices
+
+### 5.2 Comprehensive Schema Design
+- The `WritingPrompt` schema captures most required dimensions
+- Good use of enums for type safety
+- Extensible design for future features
+
+### 5.3 Strong Evaluation Methodology
+- Correct implementation of majority-of-majorities voting
+- Proper position randomization for bias mitigation
+- Multiple judge models for robustness
+
+### 5.4 Good Technology Choices
+- httpx for async HTTP (better than requests)
+- Pydantic for validation
+- Textual for modern TUI
+- SQLite for simple persistence
+
+### 5.5 Statistical Rigor
+- Wilson score intervals for confidence
+- Binomial tests for significance
+- Cohen's Kappa for inter-rater reliability
+
+### 5.6 Cost Awareness
+- Cost estimation before runs
+- Token tracking
+- Pricing model integration
+
+---
+
+# IMPROVED PLAN
+
+## Overview
+
+The following improved plan addresses all critical gaps and issues identified above while preserving the strengths of the original draft.
+
+---
+
+## 1. Project Structure (Updated)
 
 ```
 gemini-writing-eval/
 ├── pyproject.toml
 ├── README.md
-├── config/
-│   ├── presets.yaml                  # 10 preset configurations
-│   ├── models.yaml                   # Model definitions and pricing
-│   ├── judge_prompts.yaml            # Judge persona templates
-│   └── openrouter_models.json        # Verified model ID mappings (fetched)
+├── .env.example
+│
 ├── src/
 │   ├── __init__.py
-│   ├── cli.py
-│   ├── config.py
+│   ├── main.py
+│   │
+│   ├── config/
+│   │   ├── __init__.py
+│   │   ├── settings.py
+│   │   ├── presets.py
+│   │   └── cost_estimator.py
+│   │
 │   ├── data/
 │   │   ├── __init__.py
-│   │   ├── onet_loader.py            # O*NET database interface
-│   │   ├── onet_reference.py         # NEW: Parse ONET_REFERENCE.md
-│   │   ├── naics_mapper.py           # NAICS industry mapping
-│   │   ├── company_db.py             # Real company database
-│   │   └── name_generator.py         # Realistic name generation
+│   │   ├── onet_extractor.py        # Reads ONET_WRITING_REFERENCE.md
+│   │   ├── naics_mapper.py
+│   │   ├── company_database.py      # Loads from JSON
+│   │   ├── name_generator.py        # Census-based names
+│   │   └── companies.json           # External company data
+│   │
 │   ├── prompts/
 │   │   ├── __init__.py
-│   │   ├── generator.py              # Main prompt orchestrator
-│   │   ├── phase1_llm.py             # LLM persona variations
-│   │   ├── phase2_algorithmic.py     # Deterministic combinations
-│   │   ├── phase3_enrichment.py      # LLM context enrichment
-│   │   ├── revision_generator.py     # NEW: Revision/editing tasks
-│   │   ├── constraint_generator.py   # NEW: Instruction-following prompts
-│   │   ├── ambiguity_generator.py    # NEW: Deliberately vague prompts
-│   │   └── schemas.py                # Pydantic models
+│   │   ├── generator.py
+│   │   ├── enricher.py              # Phase 3 LLM enrichment (FULL)
+│   │   ├── offline_generator.py     # Phase 1 offline LLM generation
+│   │   ├── constraint_generator.py  # Instruction-following constraints
+│   │   ├── schemas.py
+│   │   └── templates.py
+│   │
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── openrouter_client.py
+│   │   ├── rate_limiter.py          # Per-model rate limiting
+│   │   ├── retry_handler.py
+│   │   ├── circuit_breaker.py       # NEW: Circuit breaker pattern
+│   │   └── models.py
+│   │
 │   ├── eval/
 │   │   ├── __init__.py
-│   │   ├── runner.py
-│   │   ├── api_client.py             # OpenRouter API + model verification
-│   │   ├── judge.py                  # Judge with full persona context
-│   │   ├── vote_aggregator.py
+│   │   ├── engine.py
+│   │   ├── judge.py
+│   │   ├── comparator.py
+│   │   ├── aggregator.py
+│   │   ├── refusal_detector.py      # NEW: Refusal categorization
+│   │   ├── response_analyzer.py     # NEW: Format/pattern detection
+│   │   ├── compliance_checker.py    # NEW: Instruction compliance
+│   │   └── schemas.py
+│   │
+│   ├── storage/
+│   │   ├── __init__.py
+│   │   ├── database.py              # Using aiosqlite
 │   │   ├── checkpoint.py
-│   │   ├── response_analyzer.py      # NEW: Structure/pattern analysis
-│   │   └── constraint_checker.py     # NEW: Instruction compliance
+│   │   ├── exporter.py              # CSV/JSON export (FULL)
+│   │   └── directory_manager.py     # NEW: Full directory structure
+│   │
 │   ├── analysis/
 │   │   ├── __init__.py
 │   │   ├── statistics.py
-│   │   ├── bias_detection.py
-│   │   ├── weakness_finder.py
-│   │   ├── regional_analysis.py      # NEW: English variant analysis
-│   │   ├── visualizations.py
-│   │   └── cross_run.py              # NEW: Cross-run comparison
-│   ├── reporting/
+│   │   ├── bias_detector.py         # Extended with all bias types
+│   │   ├── weakness_finder.py       # FULL implementation
+│   │   └── cross_run_comparator.py  # NEW: Cross-run analysis
+│   │
+│   ├── tui/
 │   │   ├── __init__.py
-│   │   ├── pdf_generator.py
-│   │   └── templates/
-│   └── tui/
+│   │   ├── app.py
+│   │   ├── progress.py              # FULL implementation
+│   │   ├── viewer.py
+│   │   ├── detail_screen.py         # NEW: Detail view screen
+│   │   ├── stats_screen.py          # NEW: Statistics screen
+│   │   └── widgets.py
+│   │
+│   └── reports/
 │       ├── __init__.py
-│       ├── app.py
-│       ├── progress.py
-│       └── viewer.py
+│       ├── pdf_generator.py         # Using weasyprint
+│       ├── charts.py
+│       ├── readme_generator.py      # NEW: Auto-generate README.md
+│       └── templates/
+│           └── report.html          # HTML template for PDF
+│
 ├── db/
 │   ├── onet.db
-│   ├── ONET_REFERENCE.md             # Opus's pre-analysis (read this!)
-│   └── companies.db
+│   └── ONET_WRITING_REFERENCE.md    # Pre-processed writing tasks
+│
+├── data/
+│   ├── companies.json               # Company database
+│   ├── names_census.json            # Census-based name data
+│   └── offline_variations/          # Phase 1 pre-generated variations
+│
 ├── results/
+│   └── .gitkeep
+│
 └── tests/
+    └── ...
 ```
 
 ---
 
-## Part 2: Improved Data Pipeline
-
-### 2.1 O*NET Data Extraction (No Hardcoded Categories)
+## 2. O*NET Extractor (Using ONET_WRITING_REFERENCE.md)
 
 ```python
-# src/data/onet_loader.py
-
-from dataclasses import dataclass
-from typing import Iterator, List, Optional
+# src/data/onet_extractor.py
 import sqlite3
+import json
 from pathlib import Path
+from dataclasses import dataclass
+from typing import List, Optional, Dict
 
 @dataclass
-class OnetTask:
-    """Raw O*NET task with minimal processing - no hardcoded categories."""
+class ONetTask:
     task_id: str
     onetsoc_code: str
     occupation_title: str
     occupation_description: str
     task: str
-    task_type: Optional[str]  # Core, Supplemental, or NULL
-    job_zone: int             # 1-5 skill level
-    soc_major_group: str      # First 2 digits of SOC code
+    task_type: str
+    job_zone: int
+    writing_relevance_score: float
+    writing_context: Optional[str]
+    email_frequency: Optional[float]
+    correspondence_frequency: Optional[float]
+    writing_skill_importance: Optional[float]
 
-    # O*NET skill/context data (let these drive diversity, not hardcoded cats)
-    writing_skill_importance: float   # 2.A.1.c scale
-    writing_skill_level: float        # 2.A.1.c level
-    email_frequency: float            # 4.C.1.a.2.h
-    letters_memos_frequency: float    # 4.C.1.a.2.j
-    contact_with_others: float        # 4.C.1.a.1
-    deal_with_external: float         # 4.C.1.b.1.a
-    deal_with_public: float           # 4.C.1.b.1.c
+class ONetExtractor:
+    """Extract writing-relevant tasks from O*NET using pre-processed reference."""
 
-    # Inferred at query time, not hardcoded
-    inferred_writing_type: Optional[str] = None  # Set by LLM in Phase 1
-
-class OnetLoader:
-    """Interface to O*NET 30.1 database - extracts tasks without imposing categories."""
-
-    def __init__(self, db_path: str = "db/onet.db"):
-        self.db_path = Path(db_path)
-        self._validate_db()
-
-    def _validate_db(self):
-        """Verify database exists and has expected tables."""
-        if not self.db_path.exists():
-            raise FileNotFoundError(f"O*NET database not found at {self.db_path}")
-
-        with sqlite3.connect(self.db_path) as conn:
-            tables = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-            required = {'task_statements', 'occupation_data'}
-            found = {t[0] for t in tables}
-            if not required.issubset(found):
-                raise ValueError(f"Missing required tables: {required - found}")
-
-    def extract_writing_tasks(
-        self,
-        min_writing_importance: float = 2.5,
-        occupation_filter: Optional[List[str]] = None,
-        job_zone_filter: Optional[List[int]] = None
-    ) -> Iterator[OnetTask]:
-        """
-        Extract writing-relevant tasks using O*NET importance scores.
-
-        Does NOT use keyword matching or hardcoded categories.
-        Instead, uses Writing skill importance score (2.A.1.c) to identify
-        occupations where writing matters, then extracts all tasks from those.
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-
-            # First, get occupations with significant writing requirements
-            occ_query = """
-            SELECT DISTINCT onetsoc_code
-            FROM skills
-            WHERE element_id = '2.A.1.c'  -- Writing skill
-              AND scale_id = 'IM'         -- Importance
-              AND data_value >= ?
-            """
-            writing_occs = {
-                row[0] for row in conn.execute(occ_query, (min_writing_importance,))
-            }
-
-            # Build task extraction query
-            query = """
-            SELECT
-                t.task_id,
-                t.onetsoc_code,
-                o.title as occupation_title,
-                o.description as occupation_description,
-                t.task,
-                t.task_type,
-                COALESCE(jz.job_zone, 3) as job_zone,
-                SUBSTR(t.onetsoc_code, 1, 2) as soc_major_group,
-                COALESCE(ws_im.data_value, 3.0) as writing_importance,
-                COALESCE(ws_lv.data_value, 3.0) as writing_level,
-                COALESCE(wc_email.data_value, 3.0) as email_freq,
-                COALESCE(wc_letter.data_value, 3.0) as letter_freq,
-                COALESCE(wc_contact.data_value, 3.0) as contact_others,
-                COALESCE(wc_external.data_value, 3.0) as deal_external,
-                COALESCE(wc_public.data_value, 3.0) as deal_public
-            FROM task_statements t
-            JOIN occupation_data o ON t.onetsoc_code = o.onetsoc_code
-            LEFT JOIN job_zones jz ON t.onetsoc_code = jz.onetsoc_code
-            LEFT JOIN skills ws_im ON t.onetsoc_code = ws_im.onetsoc_code
-                AND ws_im.element_id = '2.A.1.c' AND ws_im.scale_id = 'IM'
-            LEFT JOIN skills ws_lv ON t.onetsoc_code = ws_lv.onetsoc_code
-                AND ws_lv.element_id = '2.A.1.c' AND ws_lv.scale_id = 'LV'
-            LEFT JOIN work_context wc_email ON t.onetsoc_code = wc_email.onetsoc_code
-                AND wc_email.element_id = '4.C.1.a.2.h'
-            LEFT JOIN work_context wc_letter ON t.onetsoc_code = wc_letter.onetsoc_code
-                AND wc_letter.element_id = '4.C.1.a.2.j'
-            LEFT JOIN work_context wc_contact ON t.onetsoc_code = wc_contact.onetsoc_code
-                AND wc_contact.element_id = '4.C.1.a.1'
-            LEFT JOIN work_context wc_external ON t.onetsoc_code = wc_external.onetsoc_code
-                AND wc_external.element_id = '4.C.1.b.1.a'
-            LEFT JOIN work_context wc_public ON t.onetsoc_code = wc_public.onetsoc_code
-                AND wc_public.element_id = '4.C.1.b.1.c'
-            WHERE t.onetsoc_code IN ({})
-            """.format(','.join('?' * len(writing_occs)))
-
-            params = list(writing_occs)
-
-            for row in conn.execute(query, params):
-                # Apply filters
-                if occupation_filter:
-                    if not any(row['onetsoc_code'].startswith(o) for o in occupation_filter):
-                        continue
-                if job_zone_filter:
-                    if row['job_zone'] not in job_zone_filter:
-                        continue
-
-                yield OnetTask(
-                    task_id=row['task_id'],
-                    onetsoc_code=row['onetsoc_code'],
-                    occupation_title=row['occupation_title'],
-                    occupation_description=row['occupation_description'],
-                    task=row['task'],
-                    task_type=row['task_type'],
-                    job_zone=row['job_zone'],
-                    soc_major_group=row['soc_major_group'],
-                    writing_skill_importance=row['writing_importance'],
-                    writing_skill_level=row['writing_level'],
-                    email_frequency=row['email_freq'],
-                    letters_memos_frequency=row['letter_freq'],
-                    contact_with_others=row['contact_others'],
-                    deal_with_external=row['deal_external'],
-                    deal_with_public=row['deal_public']
-                )
-
-    def get_task_count(self) -> int:
-        """Get total number of tasks in database."""
-        with sqlite3.connect(self.db_path) as conn:
-            return conn.execute("SELECT COUNT(*) FROM task_statements").fetchone()[0]
-
-    def get_occupation_count(self) -> int:
-        """Get number of unique occupations."""
-        with sqlite3.connect(self.db_path) as conn:
-            return conn.execute(
-                "SELECT COUNT(DISTINCT onetsoc_code) FROM task_statements"
-            ).fetchone()[0]
-```
-
-### 2.2 O*NET Reference Integration
-
-```python
-# src/data/onet_reference.py
-
-from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Dict, Optional
-import re
-
-@dataclass
-class WritingTaskGuidance:
-    """Guidance extracted from ONET_REFERENCE.md"""
-    task_patterns: List[str]         # Patterns that indicate writing tasks
-    high_writing_occupations: List[str]  # SOC codes with heavy writing
-    communication_contexts: List[str]    # Types of communication situations
-    recommended_sampling: Dict[str, float]  # Sampling weights by occupation group
-
-class OnetReferenceParser:
-    """
-    Parse the ONET_REFERENCE.md file created by Opus.
-    This contains pre-analyzed guidance on writing tasks in O*NET.
-    """
-
-    def __init__(self, reference_path: str = "db/ONET_REFERENCE.md"):
+    def __init__(self, db_path: str, reference_path: str = "db/ONET_WRITING_REFERENCE.md"):
+        self.db_path = db_path
         self.reference_path = Path(reference_path)
-        self.guidance: Optional[WritingTaskGuidance] = None
+        self.conn = sqlite3.connect(db_path)
+        self.conn.row_factory = sqlite3.Row
 
-    def load(self) -> WritingTaskGuidance:
-        """Load and parse the reference document."""
+        # Load pre-processed writing task guidance
+        self._writing_guidance = self._load_writing_reference()
+        self._task_cache: Optional[List[ONetTask]] = None
+
+    def _load_writing_reference(self) -> Dict:
+        """Load the OPUS-generated writing task reference."""
         if not self.reference_path.exists():
-            # Return default guidance if file doesn't exist
-            return self._default_guidance()
+            raise FileNotFoundError(
+                f"ONET_WRITING_REFERENCE.md not found at {self.reference_path}. "
+                "This file should contain pre-processed writing task guidance."
+            )
 
         content = self.reference_path.read_text()
+        # Parse the reference document for task IDs, categories, guidance
+        return self._parse_reference_document(content)
 
-        # Extract structured information from markdown
-        # This is a simplified parser - actual implementation would be more robust
-
-        task_patterns = self._extract_section(content, "Task Patterns")
-        high_writing = self._extract_section(content, "High Writing Occupations")
-        contexts = self._extract_section(content, "Communication Contexts")
-
-        self.guidance = WritingTaskGuidance(
-            task_patterns=task_patterns,
-            high_writing_occupations=high_writing,
-            communication_contexts=contexts,
-            recommended_sampling={}
-        )
-
-        return self.guidance
-
-    def _extract_section(self, content: str, section_name: str) -> List[str]:
-        """Extract bullet points from a markdown section."""
-        pattern = rf"##\s*{section_name}.*?\n((?:[-*]\s+.*\n)+)"
-        match = re.search(pattern, content, re.IGNORECASE)
-        if not match:
-            return []
-
-        bullets = re.findall(r"[-*]\s+(.+)", match.group(1))
-        return [b.strip() for b in bullets]
-
-    def _default_guidance(self) -> WritingTaskGuidance:
-        """Default guidance if ONET_REFERENCE.md not available."""
-        return WritingTaskGuidance(
-            task_patterns=[],
-            high_writing_occupations=[],
-            communication_contexts=[
-                "internal", "external", "customer", "stakeholder",
-                "formal", "informal", "urgent", "routine"
-            ],
-            recommended_sampling={}
-        )
-```
-
-### 2.3 NAICS Industry Mapping (Unchanged but with better company coverage)
-
-```python
-# src/data/naics_mapper.py
-# (Similar to original but with expanded company database)
-# See original draft - this component is adequate
-```
-
-### 2.4 Company Database (Expanded)
-
-```python
-# src/data/company_db.py
-
-from dataclasses import dataclass
-from enum import Enum
-from typing import List, Optional, Dict
-import random
-import sqlite3
-from pathlib import Path
-
-class CompanySize(Enum):
-    STARTUP = "startup"           # <50 employees
-    SMALL = "small"               # 50-200 employees
-    MIDMARKET = "midmarket"       # 200-2000 employees
-    ENTERPRISE = "enterprise"     # 2000-10000 employees
-    FORTUNE_500 = "fortune_500"   # 10000+ employees
-
-@dataclass
-class Company:
-    name: str
-    size: CompanySize
-    industry_naics: str
-    founded_year: Optional[int]
-    hq_location: str
-    hq_country: str  # NEW: For regional English variants
-    public: bool
-    employee_count_approx: int
-    description: str
-
-class CompanyDatabase:
-    """
-    Database of real companies for prompt grounding.
-    Expanded to include international companies for regional variant testing.
-    """
-
-    def __init__(self, db_path: str = "db/companies.db"):
-        self.db_path = Path(db_path)
-        self._init_db()
-
-    def _init_db(self):
-        """Initialize company database with curated data."""
-        # In production, this loads from companies.db
-        # Here we show the structure
-        self.companies: Dict[str, Dict[CompanySize, List[Company]]] = {
-            '52': {  # Finance
-                CompanySize.FORTUNE_500: [
-                    Company("JPMorgan Chase", CompanySize.FORTUNE_500, "52", 1799,
-                           "New York, NY", "US", True, 290000, "Global financial services"),
-                    Company("HSBC Holdings", CompanySize.FORTUNE_500, "52", 1865,
-                           "London", "UK", True, 220000, "British multinational bank"),
-                    Company("Commonwealth Bank", CompanySize.FORTUNE_500, "52", 1911,
-                           "Sydney", "AU", True, 48000, "Australian bank"),
-                ],
-                CompanySize.ENTERPRISE: [
-                    Company("Ally Financial", CompanySize.ENTERPRISE, "52", 1919,
-                           "Detroit, MI", "US", True, 11000, "Digital financial services"),
-                ],
-                CompanySize.STARTUP: [
-                    Company("Ramp", CompanySize.STARTUP, "52", 2019,
-                           "New York, NY", "US", False, 350, "Corporate card platform"),
-                ],
-            },
-            '54': {  # Professional Services
-                CompanySize.FORTUNE_500: [
-                    Company("Deloitte", CompanySize.FORTUNE_500, "54", 1845,
-                           "London", "UK", False, 415000, "Professional services"),
-                    Company("Accenture", CompanySize.FORTUNE_500, "54", 1989,
-                           "Dublin", "IE", True, 733000, "IT consulting"),
-                ],
-                CompanySize.MIDMARKET: [
-                    Company("West Monroe", CompanySize.MIDMARKET, "54", 2002,
-                           "Chicago, IL", "US", False, 1500, "Business consulting"),
-                ],
-            },
-            # Additional industries with international coverage...
+    def _parse_reference_document(self, content: str) -> Dict:
+        """Parse the ONET_WRITING_REFERENCE.md file."""
+        # Extract relevant task IDs, writing contexts, and guidance
+        # This would parse the markdown structure
+        guidance = {
+            'relevant_task_ids': [],
+            'task_contexts': {},
+            'category_mappings': {}
         }
 
-    def get_company(
-        self,
-        naics_code: str,
-        size: Optional[CompanySize] = None,
-        country: Optional[str] = None,  # NEW: Filter by country
-        seed: Optional[int] = None
-    ) -> Company:
-        """Get a company matching criteria."""
-        if seed is not None:
-            random.seed(seed)
-
-        industry_companies = self.companies.get(naics_code, {})
-        if not industry_companies:
-            return self._generate_fallback_company(naics_code, size, country)
-
-        # Flatten to list
-        candidates = []
-        for s, companies in industry_companies.items():
-            if size and s != size:
-                continue
-            for c in companies:
-                if country and c.hq_country != country:
-                    continue
-                candidates.append(c)
-
-        if not candidates:
-            return self._generate_fallback_company(naics_code, size, country)
-
-        return random.choice(candidates)
-
-    def get_international_company(self, seed: Optional[int] = None) -> Company:
-        """Get a company from outside the US for regional variant scenarios."""
-        if seed:
-            random.seed(seed)
-
-        non_us = []
-        for industry in self.companies.values():
-            for companies in industry.values():
-                non_us.extend([c for c in companies if c.hq_country != "US"])
-
-        return random.choice(non_us) if non_us else self._generate_fallback_company("54", None, "UK")
-
-    def _generate_fallback_company(
-        self,
-        naics_code: str,
-        size: Optional[CompanySize],
-        country: Optional[str]
-    ) -> Company:
-        """Generate a plausible generic company."""
-        size = size or random.choice(list(CompanySize))
-        country = country or "US"
-
-        employee_ranges = {
-            CompanySize.STARTUP: 25,
-            CompanySize.SMALL: 100,
-            CompanySize.MIDMARKET: 800,
-            CompanySize.ENTERPRISE: 5000,
-            CompanySize.FORTUNE_500: 50000,
-        }
-
-        return Company(
-            name=f"Acme {naics_code} Corp",
-            size=size,
-            industry_naics=naics_code,
-            founded_year=2010,
-            hq_location="Various",
-            hq_country=country,
-            public=size in (CompanySize.ENTERPRISE, CompanySize.FORTUNE_500),
-            employee_count_approx=employee_ranges[size],
-            description="Generic company for evaluation"
-        )
-```
-
-### 2.5 Name Generator (With International Support)
-
-```python
-# src/data/name_generator.py
-
-from dataclasses import dataclass
-from enum import Enum
-from typing import Optional, Dict, List
-import random
-
-class Generation(Enum):
-    GEN_Z = "gen_z"           # Born 1997-2012
-    GEN_A = "gen_a"           # Born 2013+ (youngest workers)
-    MILLENNIAL = "millennial" # Born 1981-1996
-    GEN_X = "gen_x"           # Born 1965-1980
-    BOOMER = "boomer"         # Born 1946-1964
-
-class NameFormality(Enum):
-    CASUAL = "casual"         # Mike, Lisa
-    STANDARD = "standard"     # Michael Chen, Lisa Johnson
-    FORMAL = "formal"         # Dr. Michael T. Chen, Ms. Lisa M. Johnson
-
-class EnglishVariant(Enum):
-    US = "en-US"
-    UK = "en-GB"
-    AU = "en-AU"
-    NON_NATIVE = "non-native"
-
-@dataclass
-class PersonName:
-    first_name: str
-    last_name: str
-    full_name: str
-    email: str
-    title_prefix: Optional[str]
-    generation: Generation
-    formality: NameFormality
-    english_variant: EnglishVariant
-    is_native_english: bool
-
-class NameGenerator:
-    """
-    Generates demographically diverse realistic names.
-    Improved to support international names and English variants.
-    """
-
-    # Name pools by region/ethnicity
-    FIRST_NAMES = {
-        'us_anglo_male': ['James', 'Michael', 'Robert', 'David', 'William'],
-        'us_anglo_female': ['Sarah', 'Jennifer', 'Elizabeth', 'Mary', 'Patricia'],
-        'us_hispanic_male': ['Carlos', 'Miguel', 'Jose', 'Luis', 'Antonio'],
-        'us_hispanic_female': ['Maria', 'Carmen', 'Ana', 'Rosa', 'Isabel'],
-        'us_asian_male': ['Wei', 'Jin', 'Raj', 'Anil', 'Vikram'],
-        'us_asian_female': ['Mei', 'Priya', 'Lin', 'Aisha', 'Sana'],
-        'uk_male': ['Oliver', 'George', 'Harry', 'Jack', 'Charlie', 'Nigel'],
-        'uk_female': ['Olivia', 'Amelia', 'Isla', 'Ava', 'Emily', 'Charlotte'],
-        'au_male': ['Jack', 'William', 'Oliver', 'Noah', 'Thomas'],
-        'au_female': ['Charlotte', 'Olivia', 'Ava', 'Mia', 'Amelia'],
-        'intl_male': ['Hiroshi', 'Kenji', 'Pierre', 'Hans', 'Marco', 'Sven'],
-        'intl_female': ['Yuki', 'Sakura', 'Marie', 'Ingrid', 'Giulia', 'Astrid'],
-    }
-
-    LAST_NAMES = {
-        'us': ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Chen'],
-        'uk': ['Smith', 'Jones', 'Williams', 'Taylor', 'Brown', 'Davies', 'Wilson'],
-        'au': ['Smith', 'Jones', 'Williams', 'Brown', 'Wilson', 'Taylor', 'Johnson'],
-        'intl': ['Mueller', 'Rossi', 'Tanaka', 'Kim', 'Johansson', 'Dubois', 'Silva'],
-    }
-
-    def generate(
-        self,
-        generation: Optional[Generation] = None,
-        formality: NameFormality = NameFormality.STANDARD,
-        english_variant: EnglishVariant = EnglishVariant.US,
-        seed: Optional[int] = None
-    ) -> PersonName:
-        """Generate a realistic person name with regional support."""
-        if seed is not None:
-            random.seed(seed)
-
-        if generation is None:
-            # Weight towards working-age generations
-            generation = random.choices(
-                list(Generation),
-                weights=[0.15, 0.05, 0.35, 0.30, 0.15]  # GenZ, GenA, Mill, GenX, Boom
-            )[0]
-
-        # Select name pool based on variant
-        region_map = {
-            EnglishVariant.US: ('us', True),
-            EnglishVariant.UK: ('uk', True),
-            EnglishVariant.AU: ('au', True),
-            EnglishVariant.NON_NATIVE: ('intl', False),
-        }
-        region, is_native = region_map[english_variant]
-
-        gender = random.choice(['male', 'female'])
-
-        # Get appropriate name lists
-        if region == 'us':
-            ethnicity = random.choice(['anglo', 'hispanic', 'asian'])
-            first_key = f"us_{ethnicity}_{gender}"
-        else:
-            first_key = f"{region}_{gender}"
-
-        first_names = self.FIRST_NAMES.get(first_key, self.FIRST_NAMES['us_anglo_male'])
-        last_names = self.LAST_NAMES.get(region, self.LAST_NAMES['us'])
-
-        first_name = random.choice(first_names)
-        last_name = random.choice(last_names)
-
-        # Build full name based on formality
-        title = random.choice(['Dr.', 'Mr.', 'Ms.', None, None, None]) if formality == NameFormality.FORMAL else None
-        middle_initial = f"{chr(random.randint(65, 90))}." if formality == NameFormality.FORMAL else ""
-
-        if formality == NameFormality.CASUAL:
-            full_name = first_name
-        elif formality == NameFormality.STANDARD:
-            full_name = f"{first_name} {last_name}"
-        else:
-            prefix = f"{title} " if title else ""
-            full_name = f"{prefix}{first_name} {middle_initial}{last_name}".strip()
-
-        # Generate email
-        email_base = f"{first_name.lower()}.{last_name.lower()}"
-
-        return PersonName(
-            first_name=first_name,
-            last_name=last_name,
-            full_name=full_name,
-            email=email_base,
-            title_prefix=title,
-            generation=generation,
-            formality=formality,
-            english_variant=english_variant,
-            is_native_english=is_native
-        )
-```
-
----
-
-## Part 3: Improved Prompt Generation
-
-### 3.1 Enhanced Prompt Schema
-
-```python
-# src/prompts/schemas.py
-
-from datetime import datetime
-from enum import Enum
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
-
-class FormalityLevel(str, Enum):
-    VERY_CASUAL = "very_casual"
-    CASUAL = "casual"
-    NEUTRAL = "neutral"
-    FORMAL = "formal"
-    VERY_FORMAL = "very_formal"
-
-class UrgencyLevel(str, Enum):
-    LOW = "low"
-    ROUTINE = "routine"
-    MODERATE = "moderate"
-    HIGH = "high"
-    CRITICAL = "critical"
-
-class RelationshipContext(str, Enum):
-    FIRST_CONTACT = "first_contact"
-    NEW_RELATIONSHIP = "new_relationship"
-    ESTABLISHED = "established"
-    LONG_TERM = "long_term"
-
-class AudienceSize(str, Enum):
-    ONE_ON_ONE = "one_on_one"
-    SMALL_GROUP = "small_group"
-    DEPARTMENT = "department"
-    COMPANY_WIDE = "company_wide"
-    PUBLIC = "public"
-
-class EmotionalContext(str, Enum):
-    ROUTINE = "routine"
-    CELEBRATORY = "celebratory"
-    URGENT = "urgent"
-    CRISIS = "crisis"
-    CONFLICT = "conflict"
-    BAD_NEWS = "bad_news"
-    GOOD_NEWS = "good_news"
-
-class MessagePosition(str, Enum):
-    INITIAL_OUTREACH = "initial"
-    REPLY = "reply"
-    FOLLOW_UP = "follow_up"
-    FORWARD = "forward"
-
-class PromptType(str, Enum):
-    """Type of writing task - NEW: includes revision tasks."""
-    GENERATION = "generation"      # Write from scratch
-    REVISION = "revision"          # Improve existing text
-    REPLY = "reply"                # Respond to prior message
-    TONE_MATCH = "tone_match"      # Match provided style
-    AMBIGUOUS = "ambiguous"        # Deliberately vague
-
-class SensitiveCategory(str, Enum):
-    """Categories of sensitive topics to track."""
-    HR_ISSUES = "hr_issues"
-    LEGAL_MATTERS = "legal"
-    BAD_NEWS = "bad_news"
-    CONFIDENTIAL = "confidential"
-    CONFLICT = "conflict"
-    TERMINATION = "termination"
-
-class WriterPersona(BaseModel):
-    """Detailed persona for the person writing."""
-    name: str
-    email: Optional[str] = None
-    job_title: str
-    company: str
-    company_size: str
-    industry: str
-    age_range: str
-    generation: str               # GenZ, Millennial, GenX, Boomer
-    skill_level: str              # junior, mid, senior, executive
-    years_experience: Optional[int] = None  # NEW
-    english_variant: str = "en-US"
-    is_native_english: bool = True  # NEW
-
-class RecipientPersona(BaseModel):
-    """Detailed persona for the recipient(s)."""
-    name: str
-    email: Optional[str] = None
-    job_title: str
-    company: Optional[str] = None
-    relationship_to_writer: str
-    english_variant: str = "en-US"
-    is_native_english: bool = True
-
-class AttachedContext(BaseModel):
-    """Mock attachments or prior context."""
-    type: str
-    content: str
-    filename: Optional[str] = None
-
-class ExplicitConstraint(BaseModel):
-    """
-    NEW: Explicit instruction-following constraint.
-    """
-    constraint_type: str  # "length", "format", "tone", "exclusion", "inclusion"
-    description: str      # Human-readable constraint
-    verification: str     # How to check compliance (regex, word count, etc.)
-    target_value: Optional[Any] = None  # e.g., max_words=100
-
-class RevisionContext(BaseModel):
-    """
-    NEW: Context for revision/editing tasks.
-    """
-    original_text: str
-    revision_goal: str    # "make_concise", "more_professional", "soften_tone", etc.
-    specific_issues: List[str] = Field(default_factory=list)
-
-class EvalPrompt(BaseModel):
-    """Complete writing evaluation prompt with all metadata."""
-
-    # Core identification
-    prompt_id: str
-    onet_task_id: str
-    onet_task_text: str
-
-    # Occupation context
-    occupation_code: str
-    occupation_title: str
-    job_zone: int
-    soc_major_group: str
-
-    # Industry context
-    naics_code: str
-    naics_title: str
-
-    # NEW: Task type (not hardcoded category)
-    prompt_type: PromptType
-    inferred_writing_type: Optional[str] = None  # LLM-inferred, not hardcoded
-
-    # Personas
-    writer: WriterPersona
-    primary_recipient: RecipientPersona
-    cc_recipients: List[RecipientPersona] = Field(default_factory=list)
-
-    # Context dimensions
-    formality: FormalityLevel
-    urgency: UrgencyLevel
-    relationship_context: RelationshipContext
-    audience_size: AudienceSize
-    emotional_context: EmotionalContext
-    message_position: MessagePosition
-    communication_channel: Optional[str] = None  # Inferred, not hardcoded enum
-
-    # Additional context
-    temporal_context: Optional[str] = None
-    competing_objectives: List[str] = Field(default_factory=list)
-    attached_context: List[AttachedContext] = Field(default_factory=list)
-    prior_message: Optional[str] = None
-
-    # NEW: Instruction-following constraints
-    explicit_constraints: List[ExplicitConstraint] = Field(default_factory=list)
-    has_constraints: bool = False
-
-    # NEW: Revision context
-    revision_context: Optional[RevisionContext] = None
-
-    # Tone matching
-    tone_example: Optional[str] = None
-
-    # Ambiguity (intentional)
-    is_deliberately_vague: bool = False
-    vagueness_type: Optional[str] = None
-
-    # Sensitive topic flags
-    is_sensitive: bool = False
-    sensitive_categories: List[SensitiveCategory] = Field(default_factory=list)
-
-    # The actual prompt text sent to models
-    prompt_text: str
-
-    # Language
-    language: str = "en"
-    language_variant: str = "en-US"
-
-    # Generation metadata
-    generation_seed: int
-    generated_at: datetime = Field(default_factory=datetime.now)
-    generation_phase: str
-```
-
-### 3.2 Revision Task Generator (NEW)
-
-```python
-# src/prompts/revision_generator.py
-
-from typing import List, Dict, Optional
-import random
-from .schemas import RevisionContext, ExplicitConstraint
-
-class RevisionTaskGenerator:
-    """
-    Generates revision/editing tasks per PROMPT.md requirement:
-    "Include prompts where the model must improve existing text"
-    """
-
-    REVISION_TYPES = [
-        {
-            "goal": "make_concise",
-            "instruction": "Revise this draft to be more concise while preserving key information",
-            "issues": ["too wordy", "redundant phrases", "unnecessary detail"]
-        },
-        {
-            "goal": "more_professional",
-            "instruction": "Make this email more professional and polished",
-            "issues": ["too casual", "informal language", "lacks structure"]
-        },
-        {
-            "goal": "soften_tone",
-            "instruction": "Soften the tone of this message while keeping the core message",
-            "issues": ["too harsh", "could damage relationship", "sounds accusatory"]
-        },
-        {
-            "goal": "add_detail",
-            "instruction": "Add more detail and specificity to this summary",
-            "issues": ["too vague", "missing specifics", "needs examples"]
-        },
-        {
-            "goal": "simplify",
-            "instruction": "Simplify this message for a non-technical audience",
-            "issues": ["too technical", "jargon-heavy", "assumes expertise"]
-        },
-        {
-            "goal": "increase_urgency",
-            "instruction": "Rewrite to convey more urgency without being alarmist",
-            "issues": ["doesn't convey importance", "too passive", "easily ignored"]
-        },
-        {
-            "goal": "remove_ai_patterns",
-            "instruction": "Revise to remove AI-sounding phrases and make it more natural",
-            "issues": ["sounds AI-generated", "cliche phrases", "too formulaic"]
-        }
-    ]
-
-    # Sample drafts that need revision (would be generated by LLM in production)
-    SAMPLE_DRAFTS = {
-        "too_wordy": """
-Dear Mr. Johnson,
-
-I hope this email finds you well. I am writing to you today in order to follow up
-on our previous conversation that we had last week regarding the project timeline.
-After careful consideration and thorough review of all the relevant factors, I wanted
-to reach out and see if you might have some time available to discuss this matter
-further at your earliest convenience.
-
-Please let me know if you have any questions or concerns.
-
-Best regards
-        """,
-        "too_casual": """
-Hey!
-
-So I was thinking about that thing we talked about and yeah I think we should
-probably do it. Let me know what you think lol. Also btw the deadline is like
-next Friday so we should prob get on it soon.
-
-Thanks!
-        """,
-        "too_harsh": """
-Your report was submitted late and contained multiple errors. This is unacceptable.
-You need to fix these issues immediately. I expect better performance going forward.
-Failure to improve will result in consequences.
-        """,
-    }
-
-    def generate_revision_task(
-        self,
-        task_text: str,
-        seed: Optional[int] = None
-    ) -> RevisionContext:
-        """Generate a revision task for an O*NET task."""
-        if seed:
-            random.seed(seed)
-
-        revision_type = random.choice(self.REVISION_TYPES)
-
-        # In production, use LLM to generate contextual draft
-        # Here we select from samples or generate placeholder
-        draft_key = random.choice(list(self.SAMPLE_DRAFTS.keys()))
-        original_text = self.SAMPLE_DRAFTS[draft_key]
-
-        return RevisionContext(
-            original_text=original_text.strip(),
-            revision_goal=revision_type["goal"],
-            specific_issues=revision_type["issues"]
-        )
-
-    def build_revision_prompt(
-        self,
-        revision_context: RevisionContext,
-        writer_context: str
-    ) -> str:
-        """Build the full revision prompt text."""
-        goal_instructions = {
-            "make_concise": "Revise this draft to be more concise. Cut unnecessary words and phrases while preserving all key information.",
-            "more_professional": "Make this draft more professional. Improve structure, word choice, and overall polish.",
-            "soften_tone": "Soften the tone of this message. The core message should remain but be delivered more diplomatically.",
-            "add_detail": "Expand this draft with more specific details, examples, or supporting information.",
-            "simplify": "Simplify this message for someone without technical background. Replace jargon with plain language.",
-            "increase_urgency": "Rewrite to better convey urgency and importance, while remaining professional.",
-            "remove_ai_patterns": "Revise to sound more natural and human. Remove formulaic phrases and cliches."
-        }
-
-        instruction = goal_instructions.get(
-            revision_context.revision_goal,
-            "Improve this draft."
-        )
-
-        return f"""
-{writer_context}
-
-## TASK: Revision/Editing
-
-{instruction}
-
-Issues with the current draft:
-{chr(10).join(f'- {issue}' for issue in revision_context.specific_issues)}
-
-## ORIGINAL DRAFT TO REVISE:
----
-{revision_context.original_text}
----
-
-Write your revised version now.
-"""
-```
-
-### 3.3 Constraint Generator (NEW - Instruction Following)
-
-```python
-# src/prompts/constraint_generator.py
-
-from typing import List, Optional
-import random
-from .schemas import ExplicitConstraint
-
-class ConstraintGenerator:
-    """
-    Generates explicit constraints for instruction-following tests.
-    Per PROMPT.md: "Include some prompts with explicit constraints to test instruction-following"
-    """
-
-    CONSTRAINT_TEMPLATES = {
-        "length_max": [
-            ExplicitConstraint(
-                constraint_type="length",
-                description="Keep this under 100 words",
-                verification="word_count_max",
-                target_value=100
-            ),
-            ExplicitConstraint(
-                constraint_type="length",
-                description="Keep this brief - no more than 3 sentences",
-                verification="sentence_count_max",
-                target_value=3
-            ),
-            ExplicitConstraint(
-                constraint_type="length",
-                description="This should be a single paragraph",
-                verification="paragraph_count",
-                target_value=1
-            ),
-        ],
-        "length_min": [
-            ExplicitConstraint(
-                constraint_type="length",
-                description="This should be comprehensive - at least 500 words",
-                verification="word_count_min",
-                target_value=500
-            ),
-            ExplicitConstraint(
-                constraint_type="length",
-                description="Provide a detailed response of at least 3 paragraphs",
-                verification="paragraph_count_min",
-                target_value=3
-            ),
-        ],
-        "format": [
-            ExplicitConstraint(
-                constraint_type="format",
-                description="Use exactly 3 bullet points",
-                verification="bullet_count",
-                target_value=3
-            ),
-            ExplicitConstraint(
-                constraint_type="format",
-                description="Write in paragraph form only - no bullet points or lists",
-                verification="no_bullets",
-                target_value=True
-            ),
-            ExplicitConstraint(
-                constraint_type="format",
-                description="Structure with clear headers for each section",
-                verification="has_headers",
-                target_value=True
-            ),
-        ],
-        "tone": [
-            ExplicitConstraint(
-                constraint_type="tone",
-                description="Be direct and avoid pleasantries - get straight to the point",
-                verification="no_pleasantries",
-                target_value=True
-            ),
-            ExplicitConstraint(
-                constraint_type="tone",
-                description="Use a warm, encouraging tone throughout",
-                verification="tone_positive",
-                target_value=True
-            ),
-        ],
-        "exclusion": [
-            ExplicitConstraint(
-                constraint_type="exclusion",
-                description="Do not mention the budget or costs",
-                verification="excludes_words",
-                target_value=["budget", "cost", "expense", "price", "money"]
-            ),
-            ExplicitConstraint(
-                constraint_type="exclusion",
-                description="Avoid technical jargon - keep it accessible",
-                verification="readability_score",
-                target_value=60  # Flesch reading ease minimum
-            ),
-        ],
-        "inclusion": [
-            ExplicitConstraint(
-                constraint_type="inclusion",
-                description="Make sure to include next steps",
-                verification="includes_phrase",
-                target_value="next step"
-            ),
-            ExplicitConstraint(
-                constraint_type="inclusion",
-                description="Include a specific deadline",
-                verification="includes_date",
-                target_value=True
-            ),
-        ],
-    }
-
-    def generate_constraints(
-        self,
-        num_constraints: int = 1,
-        constraint_types: Optional[List[str]] = None,
-        seed: Optional[int] = None
-    ) -> List[ExplicitConstraint]:
-        """Generate random constraints for a prompt."""
-        if seed:
-            random.seed(seed)
-
-        types = constraint_types or list(self.CONSTRAINT_TEMPLATES.keys())
-        selected_type = random.choice(types)
-
-        constraints = random.sample(
-            self.CONSTRAINT_TEMPLATES[selected_type],
-            min(num_constraints, len(self.CONSTRAINT_TEMPLATES[selected_type]))
-        )
-
-        return constraints
-
-    def build_constraint_text(self, constraints: List[ExplicitConstraint]) -> str:
-        """Build constraint section for prompt text."""
-        if not constraints:
-            return ""
-
-        lines = ["## IMPORTANT CONSTRAINTS", "Follow these requirements exactly:"]
-        for c in constraints:
-            lines.append(f"- {c.description}")
-
-        return "\n".join(lines)
-```
-
-### 3.4 Ambiguity Generator (NEW)
-
-```python
-# src/prompts/ambiguity_generator.py
-
-from typing import Tuple, Optional
-import random
-
-class AmbiguityGenerator:
-    """
-    Generates deliberately vague prompts per PROMPT.md:
-    "Include some deliberately vague prompts to test how models handle uncertainty"
-    """
-
-    VAGUENESS_TYPES = {
-        "underspecified_recipient": [
-            "Write to the team about the project",
-            "Send an update to everyone involved",
-            "Let the stakeholders know about the change",
-        ],
-        "missing_context": [
-            "Follow up on our conversation",
-            "Send a reminder about what we discussed",
-            "Circle back on that thing from last week",
-        ],
-        "unclear_ask": [
-            "Put together something for the client",
-            "Draft a response to their request",
-            "Write up what we talked about",
-        ],
-        "ambiguous_tone": [
-            "Write something appropriate for the situation",
-            "Send them a message about it",
-            "Communicate the decision",
-        ],
-    }
-
-    def generate_vague_prompt(
-        self,
-        vagueness_type: Optional[str] = None,
-        seed: Optional[int] = None
-    ) -> Tuple[str, str]:
-        """
-        Generate a deliberately vague prompt.
-        Returns (prompt_text, vagueness_type)
-        """
-        if seed:
-            random.seed(seed)
-
-        if vagueness_type is None:
-            vagueness_type = random.choice(list(self.VAGUENESS_TYPES.keys()))
-
-        prompt_text = random.choice(self.VAGUENESS_TYPES[vagueness_type])
-
-        return prompt_text, vagueness_type
-
-    def get_vagueness_assessment_criteria(self) -> str:
-        """
-        Return criteria for evaluating how models handle ambiguity.
-        Used by judges to assess response quality for vague prompts.
-        """
-        return """
-        When evaluating responses to deliberately vague prompts, assess:
-        1. Does the model make reasonable assumptions?
-        2. Does it acknowledge the ambiguity (explicitly or implicitly)?
-        3. Does it ask for clarification within the response?
-        4. Does it hedge appropriately given uncertainty?
-        5. Does it hallucinate specific details not supported by the prompt?
-        6. Is the response still useful despite the vagueness?
-        """
-```
-
-### 3.5 Improved Master Prompt Generator
-
-```python
-# src/prompts/generator.py
-
-from typing import List, Iterator, Optional, Dict
-import asyncio
-import random
-from datetime import datetime
-
-from .phase1_llm import Phase1PersonaGenerator
-from .phase2_algorithmic import Phase2AlgorithmicCombiner
-from .phase3_enrichment import Phase3Enricher
-from .revision_generator import RevisionTaskGenerator
-from .constraint_generator import ConstraintGenerator
-from .ambiguity_generator import AmbiguityGenerator
-from .schemas import EvalPrompt, PromptType, ExplicitConstraint
-
-from ..data.onet_loader import OnetLoader
-from ..data.naics_mapper import NAICSMapper
-from ..data.company_db import CompanyDatabase
-from ..eval.api_client import OpenRouterClient
-
-class PromptGenerator:
-    """
-    Orchestrates three-phase prompt generation with support for:
-    - Standard generation tasks
-    - Revision/editing tasks (NEW)
-    - Instruction-following constraints (NEW)
-    - Deliberately ambiguous prompts (NEW)
-    - Regional English variants (NEW)
-    - CC/multiple recipient scenarios (NEW)
-    """
-
-    # Distribution of prompt types (configurable)
-    DEFAULT_TYPE_DISTRIBUTION = {
-        PromptType.GENERATION: 0.60,    # 60% standard generation
-        PromptType.REPLY: 0.15,          # 15% reply to prior message
-        PromptType.REVISION: 0.10,       # 10% revision tasks
-        PromptType.TONE_MATCH: 0.05,     # 5% tone matching
-        PromptType.AMBIGUOUS: 0.10,      # 10% deliberately vague
-    }
-
-    # Percentage of prompts with explicit constraints
-    CONSTRAINT_PROBABILITY = 0.15  # 15% have constraints
-
-    # Percentage with CC recipients (mixed audience)
-    CC_PROBABILITY = 0.10  # 10% have CC
-
-    # Percentage with non-US English variants
-    INTERNATIONAL_PROBABILITY = 0.10  # 10% international
-
-    def __init__(
-        self,
-        onet_loader: OnetLoader,
-        naics_mapper: NAICSMapper,
-        company_db: CompanyDatabase,
-        api_client: OpenRouterClient,
-        models: List[str],
-        seed: int = 42
-    ):
-        self.onet_loader = onet_loader
-        self.naics_mapper = naics_mapper
-        self.company_db = company_db
-        self.api_client = api_client
-
-        self.phase1 = Phase1PersonaGenerator(api_client, models)
-        self.phase2 = Phase2AlgorithmicCombiner(seed)
-        self.phase3 = Phase3Enricher(api_client, models)
-
-        self.revision_gen = RevisionTaskGenerator()
-        self.constraint_gen = ConstraintGenerator()
-        self.ambiguity_gen = AmbiguityGenerator()
-
-        self.seed = seed
-        self.rng = random.Random(seed)
-
-    async def generate_prompts(
-        self,
-        num_prompts: int,
-        occupation_filter: Optional[List[str]] = None,
-        industry_filter: Optional[List[str]] = None,
-        job_zone_filter: Optional[List[int]] = None,
-        type_distribution: Optional[Dict[PromptType, float]] = None,
-        stratify: bool = True
-    ) -> List[EvalPrompt]:
-        """Generate specified number of diverse prompts."""
-
-        type_dist = type_distribution or self.DEFAULT_TYPE_DISTRIBUTION
-
-        # Phase 1: Extract and filter tasks
-        tasks = list(self.onet_loader.extract_writing_tasks(
-            occupation_filter=occupation_filter,
-            job_zone_filter=job_zone_filter
-        ))
-
-        # Stratified sampling
-        if stratify:
-            tasks = self._stratified_sample(tasks, num_prompts)
-        else:
-            tasks = self.rng.sample(tasks, min(len(tasks), num_prompts))
-
-        prompts = []
-        for i, task in enumerate(tasks):
-            prompt_seed = hash((self.seed, task.task_id, i))
-
-            # Determine prompt type
-            prompt_type = self._select_prompt_type(type_dist, prompt_seed)
-
-            # Get industry and company
-            industries = self.naics_mapper.get_industries_for_occupation(task.soc_major_group)
-            if industry_filter:
-                industries = [ind for ind in industries if ind.code in industry_filter]
-            industry = industries[0] if industries else None
-
-            # Decide if international scenario
-            is_international = self.rng.random() < self.INTERNATIONAL_PROBABILITY
-            if is_international:
-                company = self.company_db.get_international_company(seed=prompt_seed)
-            else:
-                company = self.company_db.get_company(
-                    industry.code if industry else '54',
-                    seed=prompt_seed
-                )
-
-            # Generate personas (Phase 1)
-            personas = await self.phase1.generate_personas(
-                task, company, industry,
-                is_international=is_international
-            )
-
-            # Generate combinations (Phase 2)
-            combinations = list(self.phase2.generate_combinations(
-                task, personas, company, industry, num_prompts=1
-            ))
-
-            for combo in combinations:
-                combo['prompt_type'] = prompt_type
-
-                # Add constraints if applicable
-                if self.rng.random() < self.CONSTRAINT_PROBABILITY:
-                    combo['constraints'] = self.constraint_gen.generate_constraints(
-                        num_constraints=self.rng.randint(1, 2),
-                        seed=prompt_seed
-                    )
-
-                # Add CC recipients if applicable
-                if self.rng.random() < self.CC_PROBABILITY:
-                    combo['cc_recipients'] = await self._generate_cc_recipients(
-                        combo, prompt_seed
-                    )
-
-                # Generate revision context if revision task
-                if prompt_type == PromptType.REVISION:
-                    combo['revision_context'] = self.revision_gen.generate_revision_task(
-                        task.task, seed=prompt_seed
-                    )
-
-                # Generate ambiguous prompt if ambiguous type
-                if prompt_type == PromptType.AMBIGUOUS:
-                    vague_text, vague_type = self.ambiguity_gen.generate_vague_prompt(
-                        seed=prompt_seed
-                    )
-                    combo['vague_prompt'] = vague_text
-                    combo['vagueness_type'] = vague_type
-
-                # Phase 3: Enrich and build final prompt
-                prompt = await self.phase3.enrich_prompt(combo)
-                prompts.append(prompt)
-
-        return prompts
-
-    def _select_prompt_type(
-        self,
-        distribution: Dict[PromptType, float],
-        seed: int
-    ) -> PromptType:
-        """Select prompt type based on distribution."""
-        rng = random.Random(seed)
-        types = list(distribution.keys())
-        weights = list(distribution.values())
-        return rng.choices(types, weights=weights)[0]
-
-    async def _generate_cc_recipients(
-        self,
-        combo: Dict,
-        seed: int
-    ) -> List[Dict]:
-        """Generate CC recipients for mixed-audience scenarios."""
-        # Would use LLM to generate appropriate CC recipients
-        # based on the scenario (e.g., boss CC'd on client email)
-        return []
-
-    def _stratified_sample(self, tasks: List, target_count: int) -> List:
-        """Sample tasks with even distribution across dimensions."""
-        from collections import defaultdict
-
-        strata = defaultdict(list)
-        for task in tasks:
-            # Stratify by job_zone and soc_major_group
-            key = (task.job_zone, task.soc_major_group)
-            strata[key].append(task)
-
-        per_stratum = max(1, target_count // len(strata))
-        sampled = []
-
-        for key, stratum_tasks in strata.items():
-            sample_size = min(per_stratum, len(stratum_tasks))
-            sampled.extend(self.rng.sample(stratum_tasks, sample_size))
-
-        # Fill remaining quota
-        remaining = target_count - len(sampled)
-        if remaining > 0:
-            all_remaining = [t for t in tasks if t not in sampled]
-            sampled.extend(self.rng.sample(
-                all_remaining,
-                min(remaining, len(all_remaining))
-            ))
-
-        return sampled[:target_count]
-```
-
----
-
-## Part 4: Improved Evaluation and Judging
-
-### 4.1 OpenRouter Client with Model Verification
-
-```python
-# src/eval/api_client.py
-
-from dataclasses import dataclass
-from typing import List, Dict, Optional, Any
-import asyncio
-import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential_jitter
-import time
-import json
-from pathlib import Path
-
-@dataclass
-class ModelResponse:
-    content: str
-    model: str
-    prompt_tokens: int
-    completion_tokens: int
-    latency_ms: float
-    finish_reason: str
-    raw_response: Dict
-
-@dataclass
-class ModelInfo:
-    """Information about a model from OpenRouter."""
-    id: str
-    name: str
-    pricing_prompt: float   # per 1M tokens
-    pricing_completion: float
-    context_length: int
-    available: bool
-
-class OpenRouterClient:
-    """
-    Unified client for OpenRouter API.
-    Improved with model verification and dynamic pricing.
-    """
-
-    BASE_URL = "https://openrouter.ai/api/v1"
-
-    # Default model mappings (updated after verification)
-    DEFAULT_MODEL_IDS = {
-        'gemini-3-pro': 'google/gemini-3.0-pro',
-        'gemini-3-flash': 'google/gemini-3.0-flash',
-        'gpt-5.2-thinking': 'openai/gpt-5.2',
-        'gpt-4.1': 'openai/gpt-4.1',
-        'claude-opus-4.5': 'anthropic/claude-4-opus',
-        'claude-sonnet': 'anthropic/claude-4-sonnet',
-        'grok-4.1-thinking': 'x-ai/grok-4.1',
-        'kimi-k2-thinking': 'moonshot/kimi-k2',
-    }
-
-    def __init__(
-        self,
-        api_key: str,
-        timeout: float = 120.0,
-        verify_models: bool = True
-    ):
-        self.api_key = api_key
-        self.timeout = timeout
-        self.client = httpx.AsyncClient(
-            base_url=self.BASE_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "HTTP-Referer": "https://gemini-writing-eval.internal",
-                "X-Title": "Gemini Writing Eval"
-            },
-            timeout=httpx.Timeout(timeout)
-        )
-
-        self.model_ids = self.DEFAULT_MODEL_IDS.copy()
-        self.model_info: Dict[str, ModelInfo] = {}
-        self._verified = False
-
-        if verify_models:
-            # Will be called in async context
-            self._needs_verification = True
-        else:
-            self._needs_verification = False
-
-    async def verify_models(self) -> Dict[str, ModelInfo]:
-        """
-        Verify model IDs are correct by querying OpenRouter.
-        Updates model_ids with correct values.
-        """
-        try:
-            response = await self.client.get("/models")
-            response.raise_for_status()
-            data = response.json()
-
-            available_models = {m['id']: m for m in data.get('data', [])}
-
-            for friendly_name, model_id in list(self.model_ids.items()):
-                if model_id in available_models:
-                    model_data = available_models[model_id]
-                    self.model_info[friendly_name] = ModelInfo(
-                        id=model_id,
-                        name=model_data.get('name', model_id),
-                        pricing_prompt=model_data.get('pricing', {}).get('prompt', 0) * 1_000_000,
-                        pricing_completion=model_data.get('pricing', {}).get('completion', 0) * 1_000_000,
-                        context_length=model_data.get('context_length', 128000),
-                        available=True
-                    )
-                else:
-                    # Try to find similar model
-                    found = False
-                    for avail_id in available_models:
-                        if friendly_name.replace('-', '').lower() in avail_id.lower():
-                            self.model_ids[friendly_name] = avail_id
-                            found = True
-                            break
-
-                    if not found:
-                        self.model_info[friendly_name] = ModelInfo(
-                            id=model_id,
-                            name=friendly_name,
-                            pricing_prompt=10.0,  # Default fallback
-                            pricing_completion=30.0,
-                            context_length=128000,
-                            available=False
-                        )
-
-            self._verified = True
-            return self.model_info
-
-        except Exception as e:
-            # Fall back to defaults
-            self._verified = True
-            return {}
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential_jitter(initial=1, max=30)
-    )
-    async def complete(
-        self,
-        model: str,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        **kwargs
-    ) -> ModelResponse:
-        """Send completion request with automatic retry."""
-
-        if self._needs_verification and not self._verified:
-            await self.verify_models()
-
-        model_id = self.model_ids.get(model, model)
-        start_time = time.perf_counter()
-
-        response = await self.client.post(
-            "/chat/completions",
-            json={
-                "model": model_id,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                **kwargs
-            }
-        )
-
-        latency_ms = (time.perf_counter() - start_time) * 1000
-
-        if response.status_code == 429:
-            raise RateLimitError("Rate limit exceeded")
-
-        response.raise_for_status()
-        data = response.json()
-
-        return ModelResponse(
-            content=data['choices'][0]['message']['content'],
-            model=model,
-            prompt_tokens=data['usage']['prompt_tokens'],
-            completion_tokens=data['usage']['completion_tokens'],
-            latency_ms=latency_ms,
-            finish_reason=data['choices'][0].get('finish_reason', 'unknown'),
-            raw_response=data
-        )
-
-    def estimate_cost(
-        self,
-        model: str,
-        input_tokens: int,
-        output_tokens: int
-    ) -> float:
-        """Estimate cost for a completion using verified pricing."""
-        if model in self.model_info:
-            info = self.model_info[model]
-            return (input_tokens * info.pricing_prompt + output_tokens * info.pricing_completion) / 1_000_000
-
-        # Fallback to hardcoded estimates
-        fallback_pricing = {
-            'gemini-3-pro': (2.50, 10.00),
-            'gemini-3-flash': (0.25, 1.00),
-            'gpt-5.2-thinking': (15.00, 60.00),
-            'gpt-4.1': (2.00, 8.00),
-            'claude-opus-4.5': (15.00, 75.00),
-            'claude-sonnet': (3.00, 15.00),
-        }
-        pricing = fallback_pricing.get(model, (5.0, 20.0))
-        return (input_tokens * pricing[0] + output_tokens * pricing[1]) / 1_000_000
-
-    async def close(self):
-        await self.client.aclose()
-
-class RateLimitError(Exception):
-    pass
-```
-
-### 4.2 Improved Judge Panel with Full Persona Context
-
-```python
-# src/eval/judge.py
-
-from dataclasses import dataclass
-from typing import List, Dict, Optional
-import asyncio
-from enum import Enum
-import json
-
-from .api_client import OpenRouterClient
-
-class JudgeVerdict(Enum):
-    A_WINS = "a_wins"
-    B_WINS = "b_wins"
-    TIE = "tie"
-
-@dataclass
-class JudgeVote:
-    verdict: JudgeVerdict
-    confidence: float
-    reasoning: str
-    criteria_scores: Dict[str, Dict]
-
-@dataclass
-class JudgeResult:
-    judge_model: str
-    persona: str
-    votes: List[JudgeVote]
-    majority_verdict: JudgeVerdict
-
-class JudgePanel:
-    """
-    Ensemble of LLM judges with dual personas.
-    IMPROVED: Full persona context in judge prompts per PROMPT.md requirement.
-    """
-
-    # IMPROVED: Full persona context included
-    WRITING_EXPERT_PROMPT = '''
-You are an expert writing evaluator assessing professional communication quality.
-
-## TASK CONTEXT
-Task: {task_text}
-Communication Channel: {channel}
-Urgency: {urgency}
-Formality Level: {formality}
-
-## WRITER PERSONA (CRITICAL FOR AUTHENTICITY ASSESSMENT)
-Name: {writer_name}
-Title: {writer_title}
-Company: {writer_company} ({company_size})
-Industry: {industry}
-Age Range: {writer_age}
-Generation: {writer_generation}
-Skill Level: {writer_skill}
-English Variant: {writer_english}
-Native English Speaker: {writer_native}
-
-## RECIPIENT PERSONA
-Name: {recipient_name}
-Title: {recipient_title}
-Relationship to Writer: {relationship}
-English Variant: {recipient_english}
-Native English Speaker: {recipient_native}
-
-{cc_context}
-
-## RESPONSE A
-{response_a}
-
-## RESPONSE B
-{response_b}
-
-## EVALUATION CRITERIA
-Evaluate both responses on these criteria (1-5 scale each):
-
-1. **Quality of Writing**: Grammar, clarity, flow, structure
-2. **Appropriate Length**: Neither too verbose nor too terse for THIS specific task
-3. **Tone Appropriateness**: Matches the {formality} formality level and {writer_generation} generation style
-4. **Task Completion**: Fully addresses what was asked
-5. **Clarity**: Easy to understand, unambiguous
-6. **Authenticity**: Does this read like a {writer_age} {writer_skill}-level {writer_title} would actually write? NOT generic AI output?
-7. **Cliche Avoidance**: Avoids AI patterns ("I hope this finds you well", "Please don't hesitate", excessive bullets)
-8. **Effectiveness**: Would achieve the writer's goal with this specific recipient
-
-{constraint_criteria}
-
-## OUTPUT FORMAT
-```json
-{{
-  "criteria_scores": {{
-    "quality_of_writing": {{"a": 4, "b": 3}},
-    "appropriate_length": {{"a": 3, "b": 4}},
-    "tone_appropriateness": {{"a": 4, "b": 4}},
-    "task_completion": {{"a": 5, "b": 4}},
-    "clarity": {{"a": 4, "b": 3}},
-    "authenticity": {{"a": 3, "b": 4}},
-    "cliche_avoidance": {{"a": 2, "b": 4}},
-    "effectiveness": {{"a": 4, "b": 4}}
-  }},
-  "verdict": "a_wins" | "b_wins" | "tie",
-  "confidence": 0.85,
-  "reasoning": "Response A excels in... but Response B..."
-}}
-```
-'''
-
-    # IMPROVED: Simulated recipient with full context
-    RECIPIENT_PERSONA_PROMPT = '''
-You are {recipient_name}, {recipient_title}.
-{recipient_context}
-
-You received a message from {writer_name}, {writer_title} at {writer_company}.
-Your relationship: {relationship}
-
-The message is regarding: {task_summary}
-
-You received two versions. Which would you prefer to receive?
-
-## VERSION A
-{response_a}
-
-## VERSION B
-{response_b}
-
-## YOUR EVALUATION
-As {recipient_name}, evaluate based on YOUR perspective:
-
-1. **Relevance**: Does this address what I need?
-2. **Actionability**: Can I easily act on this?
-3. **Respect for Time**: Is the length appropriate for my role as {recipient_title}?
-4. **Professionalism**: Is the tone appropriate for our {relationship} relationship?
-5. **Helpfulness**: Does this help me do my job?
-6. **Clarity**: Do I understand what's being asked/communicated?
-
-Output as JSON:
-```json
-{{
-  "criteria_scores": {{...}},
-  "verdict": "a_wins" | "b_wins" | "tie",
-  "confidence": 0.75,
-  "reasoning": "As {recipient_name}, I prefer Version X because..."
-}}
-```
-'''
-
-    def __init__(
-        self,
-        client: OpenRouterClient,
-        judge_models: List[str],
-        votes_per_judge: int = 5
-    ):
-        self.client = client
-        self.judge_models = judge_models
-        self.votes_per_judge = votes_per_judge
-
-    async def judge(
-        self,
-        prompt: 'EvalPrompt',
-        response_a: str,
-        response_b: str,
-        use_both_personas: bool = True
-    ) -> List[JudgeResult]:
-        """Get judgments from all judges with specified personas."""
+        # Parse sections from the reference document
+        # ... implementation based on actual format
+
+        return guidance
+
+    def extract_writing_tasks(self) -> List[ONetTask]:
+        """Extract all writing-relevant tasks using pre-processed reference."""
+        if self._task_cache is not None:
+            return self._task_cache
 
         tasks = []
-        for model in self.judge_models:
-            tasks.append(self._get_judge_result(
-                model=model,
-                persona="writing_expert",
-                prompt=prompt,
-                response_a=response_a,
-                response_b=response_b
+        relevant_ids = self._writing_guidance.get('relevant_task_ids', [])
+
+        if relevant_ids:
+            # Use pre-identified task IDs from reference
+            placeholders = ','.join(['?' for _ in relevant_ids])
+            query = f"""
+                SELECT DISTINCT
+                    t.task_id,
+                    t.onetsoc_code,
+                    o.title as occupation_title,
+                    o.description as occupation_description,
+                    t.task,
+                    t.task_type,
+                    jz.job_zone,
+                    wc_email.data_value as email_freq,
+                    wc_letter.data_value as letter_freq,
+                    sk.data_value as writing_skill
+                FROM task_statements t
+                JOIN occupation_data o ON t.onetsoc_code = o.onetsoc_code
+                LEFT JOIN job_zones jz ON t.onetsoc_code = jz.onetsoc_code
+                LEFT JOIN work_context wc_email
+                    ON t.onetsoc_code = wc_email.onetsoc_code
+                    AND wc_email.element_id = '4.C.1.a.2.h'
+                    AND wc_email.scale_id = 'CX'
+                LEFT JOIN work_context wc_letter
+                    ON t.onetsoc_code = wc_letter.onetsoc_code
+                    AND wc_letter.element_id = '4.C.1.a.2.j'
+                    AND wc_letter.scale_id = 'CX'
+                LEFT JOIN skills sk
+                    ON t.onetsoc_code = sk.onetsoc_code
+                    AND sk.element_id = '2.A.1.c'
+                    AND sk.scale_id = 'IM'
+                WHERE t.task_id IN ({placeholders})
+            """
+            cursor = self.conn.execute(query, relevant_ids)
+        else:
+            # Fallback: use writing skill importance threshold
+            query = """
+                SELECT DISTINCT
+                    t.task_id,
+                    t.onetsoc_code,
+                    o.title as occupation_title,
+                    o.description as occupation_description,
+                    t.task,
+                    t.task_type,
+                    jz.job_zone,
+                    wc_email.data_value as email_freq,
+                    wc_letter.data_value as letter_freq,
+                    sk.data_value as writing_skill
+                FROM task_statements t
+                JOIN occupation_data o ON t.onetsoc_code = o.onetsoc_code
+                LEFT JOIN job_zones jz ON t.onetsoc_code = jz.onetsoc_code
+                LEFT JOIN work_context wc_email
+                    ON t.onetsoc_code = wc_email.onetsoc_code
+                    AND wc_email.element_id = '4.C.1.a.2.h'
+                LEFT JOIN work_context wc_letter
+                    ON t.onetsoc_code = wc_letter.onetsoc_code
+                    AND wc_letter.element_id = '4.C.1.a.2.j'
+                LEFT JOIN skills sk
+                    ON t.onetsoc_code = sk.onetsoc_code
+                    AND sk.element_id = '2.A.1.c'
+                    AND sk.scale_id = 'IM'
+                WHERE sk.data_value >= 3.0
+                   OR wc_email.data_value >= 3.0
+                   OR wc_letter.data_value >= 3.0
+            """
+            cursor = self.conn.execute(query)
+
+        for row in cursor:
+            # Get additional context from reference
+            task_context = self._writing_guidance.get('task_contexts', {}).get(
+                row['task_id'], {}
+            )
+
+            tasks.append(ONetTask(
+                task_id=row['task_id'],
+                onetsoc_code=row['onetsoc_code'],
+                occupation_title=row['occupation_title'],
+                occupation_description=row['occupation_description'],
+                task=row['task'],
+                task_type=row['task_type'] or 'Unknown',
+                job_zone=row['job_zone'] or 3,
+                writing_relevance_score=task_context.get('relevance_score', 0.5),
+                writing_context=task_context.get('context'),
+                email_frequency=row['email_freq'],
+                correspondence_frequency=row['letter_freq'],
+                writing_skill_importance=row['writing_skill']
             ))
 
-            if use_both_personas:
-                tasks.append(self._get_judge_result(
-                    model=model,
-                    persona="recipient",
-                    prompt=prompt,
-                    response_a=response_a,
-                    response_b=response_b
-                ))
-
-        return await asyncio.gather(*tasks)
-
-    async def _get_judge_result(
-        self,
-        model: str,
-        persona: str,
-        prompt: 'EvalPrompt',
-        response_a: str,
-        response_b: str
-    ) -> JudgeResult:
-        """Get best-of-N votes from a single judge."""
-
-        judge_prompt = self._build_judge_prompt(persona, prompt, response_a, response_b)
-
-        votes = []
-        for i in range(self.votes_per_judge):
-            response = await self.client.complete(
-                model=model,
-                messages=[{"role": "user", "content": judge_prompt}],
-                temperature=0.3 + (i * 0.1),
-                max_tokens=2000
-            )
-            vote = self._parse_vote(response.content)
-            votes.append(vote)
-
-        verdicts = [v.verdict for v in votes]
-        majority = max(set(verdicts), key=verdicts.count)
-
-        return JudgeResult(
-            judge_model=model,
-            persona=persona,
-            votes=votes,
-            majority_verdict=majority
-        )
-
-    def _build_judge_prompt(
-        self,
-        persona: str,
-        prompt: 'EvalPrompt',
-        response_a: str,
-        response_b: str
-    ) -> str:
-        """Build judge prompt with FULL persona context."""
-
-        # Build CC context if present
-        cc_context = ""
-        if prompt.cc_recipients:
-            cc_names = [r.name for r in prompt.cc_recipients]
-            cc_context = f"CC Recipients: {', '.join(cc_names)}\nNote: The writer must navigate tone for this mixed audience."
-
-        # Build constraint criteria if present
-        constraint_criteria = ""
-        if prompt.has_constraints and prompt.explicit_constraints:
-            constraint_criteria = "9. **Instruction Following**: Did the response follow these explicit constraints?\n"
-            for c in prompt.explicit_constraints:
-                constraint_criteria += f"   - {c.description}\n"
-
-        if persona == "writing_expert":
-            return self.WRITING_EXPERT_PROMPT.format(
-                task_text=prompt.onet_task_text,
-                channel=prompt.communication_channel or "email",
-                urgency=prompt.urgency.value,
-                formality=prompt.formality.value,
-                writer_name=prompt.writer.name,
-                writer_title=prompt.writer.job_title,
-                writer_company=prompt.writer.company,
-                company_size=prompt.writer.company_size,
-                industry=prompt.writer.industry,
-                writer_age=prompt.writer.age_range,
-                writer_generation=prompt.writer.generation,
-                writer_skill=prompt.writer.skill_level,
-                writer_english=prompt.writer.english_variant,
-                writer_native="Yes" if prompt.writer.is_native_english else "No",
-                recipient_name=prompt.primary_recipient.name,
-                recipient_title=prompt.primary_recipient.job_title,
-                relationship=prompt.primary_recipient.relationship_to_writer,
-                recipient_english=prompt.primary_recipient.english_variant,
-                recipient_native="Yes" if prompt.primary_recipient.is_native_english else "No",
-                cc_context=cc_context,
-                response_a=response_a,
-                response_b=response_b,
-                constraint_criteria=constraint_criteria
-            )
-        else:
-            return self.RECIPIENT_PERSONA_PROMPT.format(
-                recipient_name=prompt.primary_recipient.name,
-                recipient_title=prompt.primary_recipient.job_title,
-                recipient_context=f"You work at {prompt.writer.company if not prompt.primary_recipient.company else prompt.primary_recipient.company}.",
-                writer_name=prompt.writer.name,
-                writer_title=prompt.writer.job_title,
-                writer_company=prompt.writer.company,
-                relationship=prompt.primary_recipient.relationship_to_writer,
-                task_summary=prompt.onet_task_text,
-                response_a=response_a,
-                response_b=response_b
-            )
-
-    def _parse_vote(self, content: str) -> JudgeVote:
-        """Parse LLM response into a JudgeVote."""
-        try:
-            start = content.find('{')
-            end = content.rfind('}') + 1
-            if start == -1 or end == 0:
-                raise ValueError("No JSON found")
-
-            data = json.loads(content[start:end])
-
-            verdict_map = {
-                'a_wins': JudgeVerdict.A_WINS,
-                'b_wins': JudgeVerdict.B_WINS,
-                'tie': JudgeVerdict.TIE
-            }
-
-            return JudgeVote(
-                verdict=verdict_map.get(data.get('verdict', 'tie'), JudgeVerdict.TIE),
-                confidence=data.get('confidence', 0.5),
-                reasoning=data.get('reasoning', ''),
-                criteria_scores=data.get('criteria_scores', {})
-            )
-        except Exception:
-            return JudgeVote(
-                verdict=JudgeVerdict.TIE,
-                confidence=0.0,
-                reasoning="Parse error",
-                criteria_scores={}
-            )
+        self._task_cache = tasks
+        return tasks
 ```
 
-### 4.3 Response Analyzer (NEW)
+---
+
+## 3. Phase 1: Offline LLM Generation
+
+```python
+# src/prompts/offline_generator.py
+import asyncio
+import json
+from pathlib import Path
+from typing import List, Dict, Any
+from dataclasses import dataclass
+import hashlib
+
+from ..api.openrouter_client import OpenRouterClient
+from ..data.onet_extractor import ONetTask
+
+@dataclass
+class PersonaVariation:
+    variation_id: str
+    task_id: str
+    writer_name: str
+    writer_role: str
+    writer_generation: str
+    writer_context: str
+    recipient_name: str
+    recipient_role: str
+    recipient_relationship: str
+    company_context: str
+    scenario_details: str
+    communication_channel: str
+    formality_suggestion: str
+    urgency_context: str
+    emotional_context: str
+
+class OfflineLLMGenerator:
+    """Phase 1: Generate diverse persona/context variations offline."""
+
+    GENERATION_PROMPT = '''You are helping create diverse, realistic writing scenarios.
+
+Given this O*NET task: "{task}"
+For occupation: {occupation} (Job Zone {job_zone})
+
+Generate 5 diverse persona/context variations for this writing task. Each should feel like a real workplace scenario.
+
+For each variation, provide:
+1. Writer name (diverse, realistic)
+2. Writer role/title (appropriate for this occupation)
+3. Writer generation (Gen Z, Millennial, Gen X, or Boomer - vary these)
+4. Writer context (brief background)
+5. Recipient name (diverse, realistic)
+6. Recipient role
+7. Relationship to writer (boss, peer, direct report, client, etc.)
+8. Company context (real company name if possible, or realistic fictional company with size)
+9. Scenario details (what's the specific situation?)
+10. Communication channel (email, memo, report, slack, etc.)
+11. Suggested formality level (1-5)
+12. Urgency context (if any)
+13. Emotional context (routine, crisis, celebration, conflict, bad news, etc.)
+
+Output as JSON array with keys: writer_name, writer_role, writer_generation, writer_context, recipient_name, recipient_role, recipient_relationship, company_context, scenario_details, communication_channel, formality_suggestion, urgency_context, emotional_context
+
+Be creative and diverse - avoid generic scenarios. Include some challenging situations.'''
+
+    def __init__(
+        self,
+        api_client: OpenRouterClient,
+        output_dir: Path,
+        models_to_use: List[str]
+    ):
+        self.api_client = api_client
+        self.output_dir = output_dir
+        self.models_to_use = models_to_use
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    async def generate_variations(
+        self,
+        tasks: List[ONetTask],
+        variations_per_task: int = 5
+    ) -> Dict[str, List[PersonaVariation]]:
+        """Generate persona variations for all tasks."""
+        all_variations = {}
+
+        for task in tasks:
+            # Check if already generated
+            cache_file = self.output_dir / f"{task.task_id}.json"
+            if cache_file.exists():
+                with open(cache_file) as f:
+                    all_variations[task.task_id] = [
+                        PersonaVariation(**v) for v in json.load(f)
+                    ]
+                continue
+
+            # Generate using each model (for balance)
+            task_variations = []
+            for model in self.models_to_use:
+                try:
+                    variations = await self._generate_for_task(task, model)
+                    task_variations.extend(variations)
+                except Exception as e:
+                    print(f"Warning: Generation failed for {task.task_id} with {model}: {e}")
+
+            # Save to cache
+            if task_variations:
+                with open(cache_file, 'w') as f:
+                    json.dump([v.__dict__ for v in task_variations], f, indent=2)
+                all_variations[task.task_id] = task_variations
+
+        return all_variations
+
+    async def _generate_for_task(
+        self,
+        task: ONetTask,
+        model: str
+    ) -> List[PersonaVariation]:
+        """Generate variations for a single task using specified model."""
+        prompt = self.GENERATION_PROMPT.format(
+            task=task.task,
+            occupation=task.occupation_title,
+            job_zone=task.job_zone
+        )
+
+        response = await self.api_client.complete(
+            model,
+            prompt,
+            temperature=0.9  # Higher for diversity
+        )
+
+        # Parse JSON response
+        try:
+            # Extract JSON from response
+            content = response.content
+            if '```json' in content:
+                content = content.split('```json')[1].split('```')[0]
+            elif '```' in content:
+                content = content.split('```')[1].split('```')[0]
+
+            variations_data = json.loads(content)
+
+            variations = []
+            for i, v in enumerate(variations_data):
+                var_id = hashlib.md5(
+                    f"{task.task_id}_{model}_{i}".encode()
+                ).hexdigest()[:12]
+
+                variations.append(PersonaVariation(
+                    variation_id=var_id,
+                    task_id=task.task_id,
+                    **v
+                ))
+
+            return variations
+
+        except json.JSONDecodeError:
+            print(f"Warning: Could not parse JSON for task {task.task_id}")
+            return []
+```
+
+---
+
+## 4. Phase 3: LLM Enrichment (Full Implementation)
+
+```python
+# src/prompts/enricher.py
+import asyncio
+from typing import List, Optional
+from dataclasses import dataclass
+import json
+
+from ..api.openrouter_client import OpenRouterClient
+from .schemas import WritingPrompt, Attachment, CompetingObjectives
+
+class PromptEnricher:
+    """Phase 3: Enrich prompts with LLM-generated context."""
+
+    ATTACHMENT_PROMPT = '''Generate realistic mock content for a workplace document.
+
+Context: {context}
+Document type: {doc_type}
+Purpose: {purpose}
+
+Generate a concise but realistic summary/excerpt of this document (100-200 words).
+Include specific but plausible details (names, numbers, dates).
+Format appropriately for the document type.
+
+Output the document content directly, no preamble.'''
+
+    PRIOR_MESSAGE_PROMPT = '''Generate a realistic prior email/message that requires a response.
+
+Context: {context}
+Sender: {sender}
+Topic: {topic}
+Tone: {tone}
+
+Generate a realistic message (50-150 words) that the recipient must respond to.
+Make it feel authentic to workplace communication.
+Include specific details that require addressing in the reply.
+
+Output the message directly, no preamble.'''
+
+    COMPETING_OBJECTIVES_PROMPT = '''Given this writing task, identify realistic competing objectives the writer must navigate.
+
+Task: {task}
+Context: {context}
+
+Identify TWO competing objectives that create tension in this communication.
+Examples: "be brief" vs "be comprehensive", "be direct" vs "be diplomatic"
+
+Output as JSON: {{"objective_a": "...", "objective_b": "...", "tension_context": "..."}}'''
+
+    def __init__(
+        self,
+        api_client: OpenRouterClient,
+        enrichment_model: str = "gemini-3-pro"
+    ):
+        self.api_client = api_client
+        self.enrichment_model = enrichment_model
+
+    async def enrich_prompts(
+        self,
+        prompts: List[WritingPrompt],
+        enrich_ratio: float = 0.3  # Enrich 30% of prompts
+    ) -> List[WritingPrompt]:
+        """Enrich prompts with additional context."""
+        import random
+
+        # Determine which prompts to enrich
+        num_to_enrich = int(len(prompts) * enrich_ratio)
+        indices_to_enrich = set(random.sample(range(len(prompts)), num_to_enrich))
+
+        enriched = []
+        tasks = []
+
+        for i, prompt in enumerate(prompts):
+            if i in indices_to_enrich:
+                tasks.append(self._enrich_single_prompt(prompt))
+            else:
+                enriched.append(prompt)
+
+        # Run enrichment in parallel batches
+        batch_size = 10
+        for i in range(0, len(tasks), batch_size):
+            batch = tasks[i:i+batch_size]
+            results = await asyncio.gather(*batch, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    print(f"Enrichment failed: {result}")
+                else:
+                    enriched.append(result)
+
+        return enriched
+
+    async def _enrich_single_prompt(self, prompt: WritingPrompt) -> WritingPrompt:
+        """Enrich a single prompt with context."""
+        enrichments = []
+
+        # Decide what enrichments to add based on prompt characteristics
+        if prompt.message_position.value in ['reply', 'follow_up']:
+            enrichments.append(self._add_prior_message(prompt))
+
+        if prompt.communication_channel in ['report', 'memo', 'presentation']:
+            enrichments.append(self._add_attachment(prompt))
+
+        if prompt.emotional_context.value in ['conflict', 'bad_news', 'crisis']:
+            enrichments.append(self._add_competing_objectives(prompt))
+
+        # 20% chance of adding temporal context
+        import random
+        if random.random() < 0.2:
+            enrichments.append(self._add_temporal_context(prompt))
+
+        # Run all enrichments
+        results = await asyncio.gather(*enrichments, return_exceptions=True)
+
+        # Apply successful enrichments
+        for result in results:
+            if isinstance(result, dict) and not isinstance(result, Exception):
+                if 'prior_message' in result:
+                    prompt.prior_message = result['prior_message']
+                if 'attachments' in result:
+                    prompt.attachments = result['attachments']
+                if 'competing_objectives' in result:
+                    prompt.competing_objectives = result['competing_objectives']
+                if 'temporal' in result:
+                    prompt.current_date = result['temporal'].get('date')
+                    prompt.deadline = result['temporal'].get('deadline')
+                    prompt.recent_event = result['temporal'].get('event')
+
+        # Rebuild prompt text with enrichments
+        prompt.prompt_text = self._build_enriched_prompt_text(prompt)
+
+        return prompt
+
+    async def _add_prior_message(self, prompt: WritingPrompt) -> dict:
+        """Generate a prior message for reply context."""
+        context = f"{prompt.occupation_title} at {prompt.company}"
+        sender = f"{prompt.recipient.name}, {prompt.recipient.role}"
+        topic = prompt.onet_task
+        tone = "professional" if prompt.formality_level.value >= 3 else "casual"
+
+        response = await self.api_client.complete(
+            self.enrichment_model,
+            self.PRIOR_MESSAGE_PROMPT.format(
+                context=context,
+                sender=sender,
+                topic=topic,
+                tone=tone
+            ),
+            temperature=0.7
+        )
+
+        return {'prior_message': response.content.strip()}
+
+    async def _add_attachment(self, prompt: WritingPrompt) -> dict:
+        """Generate mock attachment content."""
+        doc_types = {
+            'report': 'quarterly performance report',
+            'memo': 'policy update memo',
+            'presentation': 'meeting agenda and notes',
+            'email': 'previous correspondence'
+        }
+
+        doc_type = doc_types.get(prompt.communication_channel, 'supporting document')
+
+        response = await self.api_client.complete(
+            self.enrichment_model,
+            self.ATTACHMENT_PROMPT.format(
+                context=f"{prompt.occupation_title} at {prompt.company}",
+                doc_type=doc_type,
+                purpose=prompt.onet_task
+            ),
+            temperature=0.7
+        )
+
+        attachment = Attachment(
+            type=prompt.communication_channel,
+            description=f"Attached {doc_type}",
+            content=response.content.strip()
+        )
+
+        return {'attachments': [attachment]}
+
+    async def _add_competing_objectives(self, prompt: WritingPrompt) -> dict:
+        """Generate competing objectives."""
+        response = await self.api_client.complete(
+            self.enrichment_model,
+            self.COMPETING_OBJECTIVES_PROMPT.format(
+                task=prompt.onet_task,
+                context=f"{prompt.writer.role} writing to {prompt.recipient.role}"
+            ),
+            temperature=0.5
+        )
+
+        try:
+            data = json.loads(response.content)
+            objectives = CompetingObjectives(
+                objective_a=data['objective_a'],
+                objective_b=data['objective_b'],
+                context=data.get('tension_context')
+            )
+            return {'competing_objectives': objectives}
+        except:
+            return {}
+
+    async def _add_temporal_context(self, prompt: WritingPrompt) -> dict:
+        """Add temporal grounding."""
+        from datetime import datetime, timedelta
+        import random
+
+        base_date = datetime(2026, 1, 6)  # Project date
+
+        # Random deadline in next 1-14 days
+        deadline_days = random.randint(1, 14)
+        deadline = base_date + timedelta(days=deadline_days)
+
+        # Random recent event
+        events = [
+            "last week's team meeting",
+            "the recent reorganization announcement",
+            "the Q4 results release",
+            "yesterday's client call",
+            "the board meeting earlier this week"
+        ]
+
+        return {
+            'temporal': {
+                'date': base_date.strftime('%B %d, %Y'),
+                'deadline': deadline.strftime('%A, %B %d'),
+                'event': random.choice(events) if random.random() < 0.5 else None
+            }
+        }
+
+    def _build_enriched_prompt_text(self, prompt: WritingPrompt) -> str:
+        """Build the full prompt text with all enrichments."""
+        parts = [
+            f"You are {prompt.writer.name}, {prompt.writer.role} at {prompt.company}.",
+            ""
+        ]
+
+        # Add temporal context
+        if prompt.current_date:
+            parts.append(f"Today's date: {prompt.current_date}")
+        if prompt.deadline:
+            parts.append(f"Deadline: {prompt.deadline}")
+        if prompt.recent_event:
+            parts.append(f"Context: Following {prompt.recent_event}")
+
+        parts.extend([
+            "",
+            f"**Task**: {prompt.onet_task}",
+            "",
+            f"**Recipient**: {prompt.recipient.name}, {prompt.recipient.role}"
+        ])
+
+        if prompt.recipient.relationship_to_writer:
+            parts.append(f"**Relationship**: {prompt.recipient.relationship_to_writer}")
+
+        parts.extend([
+            f"**Communication type**: {prompt.communication_channel}",
+            f"**Formality level**: {prompt.formality_level.name.replace('_', ' ').title()}"
+        ])
+
+        if prompt.urgency_level.value >= 3:
+            parts.append(f"**Urgency**: {prompt.urgency_level.name}")
+
+        # Add prior message if present
+        if prompt.prior_message:
+            parts.extend([
+                "",
+                "---",
+                "**Prior message to respond to:**",
+                "",
+                prompt.prior_message,
+                "---",
+                ""
+            ])
+
+        # Add attachments if present
+        if prompt.attachments:
+            for att in prompt.attachments:
+                parts.extend([
+                    "",
+                    f"**Referenced document ({att.description}):**",
+                    "",
+                    att.content,
+                    "---",
+                    ""
+                ])
+
+        # Add competing objectives if present
+        if prompt.competing_objectives:
+            parts.extend([
+                "",
+                f"**Note**: Balance {prompt.competing_objectives.objective_a} "
+                f"with {prompt.competing_objectives.objective_b}."
+            ])
+
+        parts.extend(["", "Write the communication now."])
+
+        return "\n".join(parts)
+```
+
+---
+
+## 5. Response Analyzer (New Component)
 
 ```python
 # src/eval/response_analyzer.py
-
-from dataclasses import dataclass
-from typing import Dict, List, Optional
 import re
+from dataclasses import dataclass
+from typing import List, Optional, Set
+from enum import Enum
+
+class GreetingType(Enum):
+    FORMAL_DEAR = "formal_dear"
+    CASUAL_HI = "casual_hi"
+    NAME_ONLY = "name_only"
+    NO_GREETING = "no_greeting"
+    CLICHE_HOPE = "cliche_hope_finds_well"
+
+class SignoffType(Enum):
+    FORMAL_REGARDS = "formal_regards"
+    CASUAL_THANKS = "casual_thanks"
+    BEST = "best"
+    NONE = "none"
+    CLICHE_HESITATE = "cliche_dont_hesitate"
 
 @dataclass
 class ResponseMetadata:
-    """Metadata extracted from a response for analysis."""
+    char_count: int
     word_count: int
-    character_count: int
     sentence_count: int
     paragraph_count: int
-    has_greeting: bool
-    greeting_type: Optional[str]  # formal, casual, none
-    has_signoff: bool
-    signoff_type: Optional[str]
-    has_bullets: bool
-    bullet_count: int
-    has_headers: bool
-    header_count: int
+
+    has_bullet_points: bool
     has_numbered_list: bool
-    cliche_count: int
-    cliches_found: List[str]
+    has_headers: bool
+    has_bold_text: bool
+
+    greeting_type: Optional[GreetingType]
+    signoff_type: Optional[SignoffType]
+
+    cliche_patterns: List[str]
+    ai_markers: List[str]
+
+    estimated_reading_time_seconds: int
 
 class ResponseAnalyzer:
-    """
-    Analyzes response structure and patterns per PROMPT.md requirement:
-    "Track metadata for every response to enable deeper analysis"
-    """
+    """Analyze response metadata for systematic bias detection."""
 
-    AI_CLICHES = [
-        "i hope this email finds you well",
-        "i hope this finds you well",
-        "please don't hesitate to reach out",
-        "please do not hesitate to contact",
-        "i'm happy to help",
-        "i am happy to assist",
-        "feel free to reach out",
-        "at your earliest convenience",
-        "please let me know if you have any questions",
-        "i look forward to hearing from you",
-        "thank you for your understanding",
-        "as per our discussion",
-        "as discussed",
-        "i wanted to follow up",
-        "just checking in",
-        "hope all is well",
-        "trust this finds you well",
+    CLICHE_PATTERNS = [
+        r"hope this (email |message |)finds you well",
+        r"please don'?t hesitate to (reach out|contact)",
+        r"I'?m happy to help",
+        r"let me know if you have any questions",
+        r"I hope this helps",
+        r"please feel free to",
+        r"at your earliest convenience",
+        r"just wanted to (follow up|check in|reach out)",
+        r"as per (our|my|your)",
+        r"pursuant to",
+        r"in regards to",
+        r"I wanted to take a moment",
+        r"I trust this",
+        r"moving forward",
+        r"circle back",
+        r"touch base",
+        r"ping me",
+        r"loop (you |me |them )in",
     ]
 
-    FORMAL_GREETINGS = ["dear", "good morning", "good afternoon", "good evening"]
-    CASUAL_GREETINGS = ["hi", "hey", "hello"]
+    AI_MARKER_PATTERNS = [
+        r"As an AI",
+        r"I don'?t have (personal |)feelings",
+        r"I'?m (just |)a (language |AI |)model",
+        r"I cannot (actually |truly |)",
+        r"[Cc]ertainly[!,]? (I |Here)",
+        r"[Aa]bsolutely[!,]? (I |Here|Let)",
+        r"^(Sure|Of course|Certainly|Absolutely)[!,]",
+        r"I'?d be happy to",
+        r"Great question",
+    ]
 
-    FORMAL_SIGNOFFS = ["sincerely", "best regards", "kind regards", "respectfully", "yours truly"]
-    CASUAL_SIGNOFFS = ["thanks", "cheers", "best", "take care"]
+    def __init__(self):
+        self.cliche_re = [re.compile(p, re.IGNORECASE) for p in self.CLICHE_PATTERNS]
+        self.ai_marker_re = [re.compile(p) for p in self.AI_MARKER_PATTERNS]
 
     def analyze(self, response: str) -> ResponseMetadata:
-        """Extract metadata from a response."""
-
+        """Perform comprehensive response analysis."""
         # Basic counts
+        char_count = len(response)
         words = response.split()
         word_count = len(words)
-        character_count = len(response)
-
-        # Sentence count (approximate)
         sentences = re.split(r'[.!?]+', response)
         sentence_count = len([s for s in sentences if s.strip()])
-
-        # Paragraph count
         paragraphs = response.split('\n\n')
         paragraph_count = len([p for p in paragraphs if p.strip()])
 
+        # Structure detection
+        has_bullet_points = bool(re.search(r'^[\s]*[-*•]', response, re.MULTILINE))
+        has_numbered_list = bool(re.search(r'^[\s]*\d+[.)]\s', response, re.MULTILINE))
+        has_headers = bool(re.search(r'^#{1,6}\s|^[A-Z][^.!?]*:$', response, re.MULTILINE))
+        has_bold_text = '**' in response or '__' in response
+
         # Greeting detection
-        first_line = response.strip().split('\n')[0].lower() if response.strip() else ""
-        has_greeting = False
-        greeting_type = None
+        greeting_type = self._detect_greeting(response)
 
-        for greeting in self.FORMAL_GREETINGS:
-            if first_line.startswith(greeting):
-                has_greeting = True
-                greeting_type = "formal"
-                break
-
-        if not has_greeting:
-            for greeting in self.CASUAL_GREETINGS:
-                if first_line.startswith(greeting):
-                    has_greeting = True
-                    greeting_type = "casual"
-                    break
-
-        # Sign-off detection
-        last_lines = response.strip().split('\n')[-3:] if response.strip() else []
-        last_text = ' '.join(last_lines).lower()
-        has_signoff = False
-        signoff_type = None
-
-        for signoff in self.FORMAL_SIGNOFFS:
-            if signoff in last_text:
-                has_signoff = True
-                signoff_type = "formal"
-                break
-
-        if not has_signoff:
-            for signoff in self.CASUAL_SIGNOFFS:
-                if signoff in last_text:
-                    has_signoff = True
-                    signoff_type = "casual"
-                    break
-
-        # Bullet detection
-        bullet_pattern = r'^[\s]*[-*•]\s+'
-        bullet_matches = re.findall(bullet_pattern, response, re.MULTILINE)
-        has_bullets = len(bullet_matches) > 0
-        bullet_count = len(bullet_matches)
-
-        # Header detection
-        header_pattern = r'^#+\s+.+|^[A-Z][^.!?]*:$'
-        header_matches = re.findall(header_pattern, response, re.MULTILINE)
-        has_headers = len(header_matches) > 0
-        header_count = len(header_matches)
-
-        # Numbered list detection
-        numbered_pattern = r'^\s*\d+[.)]\s+'
-        has_numbered_list = bool(re.search(numbered_pattern, response, re.MULTILINE))
+        # Signoff detection
+        signoff_type = self._detect_signoff(response)
 
         # Cliche detection
-        response_lower = response.lower()
-        cliches_found = [c for c in self.AI_CLICHES if c in response_lower]
-        cliche_count = len(cliches_found)
+        cliche_patterns = self._detect_cliches(response)
+
+        # AI marker detection
+        ai_markers = self._detect_ai_markers(response)
+
+        # Reading time (average 200 wpm)
+        reading_time = max(1, word_count // 200 * 60)
 
         return ResponseMetadata(
+            char_count=char_count,
             word_count=word_count,
-            character_count=character_count,
             sentence_count=sentence_count,
             paragraph_count=paragraph_count,
-            has_greeting=has_greeting,
-            greeting_type=greeting_type,
-            has_signoff=has_signoff,
-            signoff_type=signoff_type,
-            has_bullets=has_bullets,
-            bullet_count=bullet_count,
-            has_headers=has_headers,
-            header_count=header_count,
+            has_bullet_points=has_bullet_points,
             has_numbered_list=has_numbered_list,
-            cliche_count=cliche_count,
-            cliches_found=cliches_found
+            has_headers=has_headers,
+            has_bold_text=has_bold_text,
+            greeting_type=greeting_type,
+            signoff_type=signoff_type,
+            cliche_patterns=cliche_patterns,
+            ai_markers=ai_markers,
+            estimated_reading_time_seconds=reading_time
         )
+
+    def _detect_greeting(self, response: str) -> Optional[GreetingType]:
+        """Detect the type of greeting used."""
+        first_line = response.split('\n')[0].lower().strip()
+
+        if 'hope this' in first_line and 'finds you well' in first_line:
+            return GreetingType.CLICHE_HOPE
+        elif first_line.startswith('dear '):
+            return GreetingType.FORMAL_DEAR
+        elif first_line.startswith(('hi ', 'hey ', 'hello ')):
+            return GreetingType.CASUAL_HI
+        elif re.match(r'^[A-Z][a-z]+,?$', first_line):
+            return GreetingType.NAME_ONLY
+        else:
+            return GreetingType.NO_GREETING
+
+    def _detect_signoff(self, response: str) -> Optional[SignoffType]:
+        """Detect the type of sign-off used."""
+        lines = response.strip().split('\n')
+        last_lines = '\n'.join(lines[-3:]).lower()
+
+        if "don't hesitate" in last_lines or "do not hesitate" in last_lines:
+            return SignoffType.CLICHE_HESITATE
+        elif any(x in last_lines for x in ['best regards', 'kind regards', 'sincerely', 'regards,']):
+            return SignoffType.FORMAL_REGARDS
+        elif 'thank' in last_lines:
+            return SignoffType.CASUAL_THANKS
+        elif 'best,' in last_lines or 'best\n' in last_lines:
+            return SignoffType.BEST
+        else:
+            return SignoffType.NONE
+
+    def _detect_cliches(self, response: str) -> List[str]:
+        """Detect cliche patterns in response."""
+        found = []
+        for pattern in self.cliche_re:
+            if pattern.search(response):
+                found.append(pattern.pattern)
+        return found
+
+    def _detect_ai_markers(self, response: str) -> List[str]:
+        """Detect patterns that suggest AI-generated content."""
+        found = []
+        for pattern in self.ai_marker_re:
+            if pattern.search(response):
+                found.append(pattern.pattern)
+        return found
 ```
 
-### 4.4 Constraint Checker (NEW)
+---
+
+## 6. Refusal Detector (New Component)
 
 ```python
-# src/eval/constraint_checker.py
+# src/eval/refusal_detector.py
+from dataclasses import dataclass
+from typing import Optional, Tuple
+from enum import Enum
+import re
 
+class RefusalType(Enum):
+    SAFETY = "safety"           # Model cites safety/policy
+    CAPABILITY = "capability"   # Model says it can't do task
+    MISUNDERSTANDING = "misunderstanding"  # Model misinterprets
+    INCOMPLETE = "incomplete"   # Model starts but doesn't finish
+    OFF_TOPIC = "off_topic"     # Model responds to wrong thing
+    NONE = "none"               # No refusal detected
+
+@dataclass
+class RefusalAnalysis:
+    is_refusal: bool
+    refusal_type: RefusalType
+    confidence: float
+    evidence: str
+    original_response: str
+
+class RefusalDetector:
+    """Detect and categorize model refusals."""
+
+    SAFETY_PATTERNS = [
+        r"I (cannot|can't|am unable to|won't) (help with|assist with|provide|generate|write|create)",
+        r"(violates|against) (my|our) (policies|guidelines|terms)",
+        r"(potentially|could be) (harmful|dangerous|inappropriate)",
+        r"I'm not (able|allowed|permitted) to",
+        r"(ethical|safety) (concerns|considerations|guidelines)",
+        r"goes against my (programming|design|principles)",
+    ]
+
+    CAPABILITY_PATTERNS = [
+        r"I don't have (access|the ability|information)",
+        r"(beyond|outside) my (capabilities|abilities|scope)",
+        r"I'm (just|only) a (language model|AI|text-based)",
+        r"I cannot (actually|physically|literally)",
+        r"I don't have (real-time|current|up-to-date) (access|information)",
+    ]
+
+    MISUNDERSTANDING_PATTERNS = [
+        r"I (think|believe) you('re| are) asking",
+        r"(unclear|not sure) what you mean",
+        r"(did you mean|are you asking)",
+        r"I'm (confused|not certain) about",
+    ]
+
+    def __init__(self):
+        self.safety_re = [re.compile(p, re.IGNORECASE) for p in self.SAFETY_PATTERNS]
+        self.capability_re = [re.compile(p, re.IGNORECASE) for p in self.CAPABILITY_PATTERNS]
+        self.misunderstanding_re = [re.compile(p, re.IGNORECASE) for p in self.MISUNDERSTANDING_PATTERNS]
+
+    def analyze(
+        self,
+        response: str,
+        prompt: str,
+        expected_min_length: int = 50
+    ) -> RefusalAnalysis:
+        """Analyze response for refusal patterns."""
+
+        # Check for empty/very short response
+        if len(response.strip()) < expected_min_length:
+            return RefusalAnalysis(
+                is_refusal=True,
+                refusal_type=RefusalType.INCOMPLETE,
+                confidence=0.9,
+                evidence=f"Response too short ({len(response)} chars)",
+                original_response=response
+            )
+
+        # Check for safety refusal
+        for pattern in self.safety_re:
+            match = pattern.search(response)
+            if match:
+                return RefusalAnalysis(
+                    is_refusal=True,
+                    refusal_type=RefusalType.SAFETY,
+                    confidence=0.95,
+                    evidence=match.group(),
+                    original_response=response
+                )
+
+        # Check for capability refusal
+        for pattern in self.capability_re:
+            match = pattern.search(response)
+            if match:
+                return RefusalAnalysis(
+                    is_refusal=True,
+                    refusal_type=RefusalType.CAPABILITY,
+                    confidence=0.85,
+                    evidence=match.group(),
+                    original_response=response
+                )
+
+        # Check for misunderstanding
+        for pattern in self.misunderstanding_re:
+            match = pattern.search(response)
+            if match:
+                return RefusalAnalysis(
+                    is_refusal=True,
+                    refusal_type=RefusalType.MISUNDERSTANDING,
+                    confidence=0.7,
+                    evidence=match.group(),
+                    original_response=response
+                )
+
+        # Check for off-topic (basic keyword overlap check)
+        if self._is_off_topic(response, prompt):
+            return RefusalAnalysis(
+                is_refusal=True,
+                refusal_type=RefusalType.OFF_TOPIC,
+                confidence=0.6,
+                evidence="Low keyword overlap with prompt",
+                original_response=response
+            )
+
+        return RefusalAnalysis(
+            is_refusal=False,
+            refusal_type=RefusalType.NONE,
+            confidence=0.0,
+            evidence="",
+            original_response=response
+        )
+
+    def _is_off_topic(self, response: str, prompt: str) -> bool:
+        """Check if response is off-topic using keyword overlap."""
+        # Extract significant words from prompt
+        prompt_words = set(
+            w.lower() for w in re.findall(r'\b\w{4,}\b', prompt)
+        )
+        response_words = set(
+            w.lower() for w in re.findall(r'\b\w{4,}\b', response)
+        )
+
+        if not prompt_words:
+            return False
+
+        overlap = len(prompt_words & response_words) / len(prompt_words)
+        return overlap < 0.1  # Less than 10% overlap suggests off-topic
+```
+
+---
+
+## 7. Weakness Finder (Full Implementation)
+
+```python
+# src/analysis/weakness_finder.py
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
-import re
-from ..prompts.schemas import ExplicitConstraint
-
-@dataclass
-class ConstraintResult:
-    constraint: ExplicitConstraint
-    passed: bool
-    actual_value: Any
-    details: str
-
-class ConstraintChecker:
-    """
-    Checks if responses comply with explicit constraints.
-    Per PROMPT.md: "Track compliance separately"
-    """
-
-    def check_all(
-        self,
-        response: str,
-        constraints: List[ExplicitConstraint]
-    ) -> List[ConstraintResult]:
-        """Check all constraints against a response."""
-        return [self.check_constraint(response, c) for c in constraints]
-
-    def check_constraint(
-        self,
-        response: str,
-        constraint: ExplicitConstraint
-    ) -> ConstraintResult:
-        """Check a single constraint."""
-
-        verification = constraint.verification
-        target = constraint.target_value
-
-        if verification == "word_count_max":
-            actual = len(response.split())
-            passed = actual <= target
-            return ConstraintResult(constraint, passed, actual, f"Word count: {actual}/{target}")
-
-        elif verification == "word_count_min":
-            actual = len(response.split())
-            passed = actual >= target
-            return ConstraintResult(constraint, passed, actual, f"Word count: {actual}/{target}")
-
-        elif verification == "sentence_count_max":
-            actual = len(re.split(r'[.!?]+', response))
-            passed = actual <= target
-            return ConstraintResult(constraint, passed, actual, f"Sentences: {actual}/{target}")
-
-        elif verification == "paragraph_count":
-            actual = len([p for p in response.split('\n\n') if p.strip()])
-            passed = actual == target
-            return ConstraintResult(constraint, passed, actual, f"Paragraphs: {actual}/{target}")
-
-        elif verification == "bullet_count":
-            actual = len(re.findall(r'^[\s]*[-*•]\s+', response, re.MULTILINE))
-            passed = actual == target
-            return ConstraintResult(constraint, passed, actual, f"Bullets: {actual}/{target}")
-
-        elif verification == "no_bullets":
-            actual = len(re.findall(r'^[\s]*[-*•]\s+', response, re.MULTILINE))
-            passed = actual == 0
-            return ConstraintResult(constraint, passed, actual, f"Bullets found: {actual}")
-
-        elif verification == "has_headers":
-            actual = len(re.findall(r'^#+\s+', response, re.MULTILINE))
-            passed = actual > 0
-            return ConstraintResult(constraint, passed, actual, f"Headers: {actual}")
-
-        elif verification == "excludes_words":
-            response_lower = response.lower()
-            found = [w for w in target if w.lower() in response_lower]
-            passed = len(found) == 0
-            return ConstraintResult(constraint, passed, found, f"Found excluded: {found}")
-
-        elif verification == "includes_phrase":
-            passed = target.lower() in response.lower()
-            return ConstraintResult(constraint, passed, passed, f"Contains '{target}': {passed}")
-
-        elif verification == "no_pleasantries":
-            pleasantries = ["hope this finds you", "hope you're well", "hope all is well"]
-            found = [p for p in pleasantries if p in response.lower()]
-            passed = len(found) == 0
-            return ConstraintResult(constraint, passed, found, f"Pleasantries: {found}")
-
-        else:
-            return ConstraintResult(constraint, True, None, "Verification not implemented")
-
-    def get_compliance_rate(self, results: List[ConstraintResult]) -> float:
-        """Calculate overall compliance rate."""
-        if not results:
-            return 1.0
-        return sum(1 for r in results if r.passed) / len(results)
-```
-
----
-
-## Part 5: Improved Database Schema
-
-### 5.1 Complete SQLite Schema (Fixed)
-
-```python
-# src/eval/checkpoint.py - Database initialization
-
-SCHEMA = '''
--- Prompts table (MISSING in original draft)
-CREATE TABLE IF NOT EXISTS prompts (
-    prompt_id TEXT PRIMARY KEY,
-    onet_task_id TEXT NOT NULL,
-    onet_task_text TEXT NOT NULL,
-    occupation_code TEXT NOT NULL,
-    occupation_title TEXT NOT NULL,
-    job_zone INTEGER,
-    soc_major_group TEXT,
-    naics_code TEXT,
-    naics_title TEXT,
-    prompt_type TEXT NOT NULL,  -- generation, revision, reply, etc.
-    inferred_writing_type TEXT,
-
-    -- Writer persona (JSON)
-    writer_json TEXT NOT NULL,
-
-    -- Recipient persona (JSON)
-    recipient_json TEXT NOT NULL,
-
-    -- Context dimensions
-    formality TEXT,
-    urgency TEXT,
-    relationship_context TEXT,
-    audience_size TEXT,
-    emotional_context TEXT,
-    message_position TEXT,
-    communication_channel TEXT,
-
-    -- Features
-    has_constraints INTEGER DEFAULT 0,
-    constraints_json TEXT,
-    has_revision_context INTEGER DEFAULT 0,
-    revision_context_json TEXT,
-    is_deliberately_vague INTEGER DEFAULT 0,
-    vagueness_type TEXT,
-    is_sensitive INTEGER DEFAULT 0,
-    sensitive_categories_json TEXT,
-
-    -- Language
-    language TEXT DEFAULT 'en',
-    language_variant TEXT DEFAULT 'en-US',
-
-    -- The actual prompt
-    prompt_text TEXT NOT NULL,
-
-    -- Metadata
-    generation_seed INTEGER,
-    generated_at TEXT NOT NULL,
-
-    -- Indexes will be created below
-    UNIQUE(prompt_id)
-);
-
--- Comparisons table
-CREATE TABLE IF NOT EXISTS comparisons (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    prompt_id TEXT NOT NULL,
-    gemini_model TEXT NOT NULL,
-    competitor_model TEXT NOT NULL,
-
-    -- Final result
-    final_verdict TEXT NOT NULL,  -- gemini_wins, competitor_wins, tie
-
-    -- Responses
-    gemini_response TEXT,
-    competitor_response TEXT,
-    gemini_latency_ms REAL,
-    competitor_latency_ms REAL,
-    gemini_tokens INTEGER,
-    competitor_tokens INTEGER,
-
-    -- Response metadata (NEW)
-    gemini_metadata_json TEXT,      -- ResponseMetadata as JSON
-    competitor_metadata_json TEXT,
-
-    -- Constraint compliance (NEW)
-    gemini_constraint_compliance REAL,
-    competitor_constraint_compliance REAL,
-    constraint_results_json TEXT,
-
-    -- Presentation order (for position bias analysis)
-    response_order TEXT,  -- "gemini_first" or "competitor_first"
-
-    -- Agreement
-    inter_judge_agreement REAL,
-
-    -- Failure handling
-    is_auto_loss INTEGER DEFAULT 0,
-    auto_loss_reason TEXT,
-    auto_loss_model TEXT,
-
-    -- Refusal tracking (NEW)
-    gemini_refused INTEGER DEFAULT 0,
-    competitor_refused INTEGER DEFAULT 0,
-    refusal_category TEXT,
-
-    -- Timestamps
-    created_at TEXT NOT NULL,
-
-    FOREIGN KEY(prompt_id) REFERENCES prompts(prompt_id),
-    UNIQUE(prompt_id, competitor_model)
-);
-
--- Judge votes table
-CREATE TABLE IF NOT EXISTS judge_votes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    comparison_id INTEGER NOT NULL,
-    judge_model TEXT NOT NULL,
-    persona TEXT NOT NULL,  -- writing_expert or recipient
-    vote_index INTEGER NOT NULL,
-    verdict TEXT NOT NULL,  -- a_wins, b_wins, tie
-    confidence REAL,
-    reasoning TEXT,
-    criteria_scores_json TEXT,
-
-    FOREIGN KEY(comparison_id) REFERENCES comparisons(id)
-);
-
--- Response metadata table (NEW - for detailed structure analysis)
-CREATE TABLE IF NOT EXISTS response_metadata (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    comparison_id INTEGER NOT NULL,
-    model TEXT NOT NULL,  -- gemini or competitor
-    word_count INTEGER,
-    character_count INTEGER,
-    sentence_count INTEGER,
-    paragraph_count INTEGER,
-    has_greeting INTEGER,
-    greeting_type TEXT,
-    has_signoff INTEGER,
-    signoff_type TEXT,
-    has_bullets INTEGER,
-    bullet_count INTEGER,
-    has_headers INTEGER,
-    header_count INTEGER,
-    has_numbered_list INTEGER,
-    cliche_count INTEGER,
-    cliches_found TEXT,  -- JSON array
-
-    FOREIGN KEY(comparison_id) REFERENCES comparisons(id)
-);
-
--- Indexes for common queries
-CREATE INDEX IF NOT EXISTS idx_prompts_occupation ON prompts(occupation_code);
-CREATE INDEX IF NOT EXISTS idx_prompts_job_zone ON prompts(job_zone);
-CREATE INDEX IF NOT EXISTS idx_prompts_formality ON prompts(formality);
-CREATE INDEX IF NOT EXISTS idx_prompts_type ON prompts(prompt_type);
-CREATE INDEX IF NOT EXISTS idx_prompts_naics ON prompts(naics_code);
-CREATE INDEX IF NOT EXISTS idx_prompts_language ON prompts(language_variant);
-CREATE INDEX IF NOT EXISTS idx_prompts_sensitive ON prompts(is_sensitive);
-
-CREATE INDEX IF NOT EXISTS idx_comparisons_prompt ON comparisons(prompt_id);
-CREATE INDEX IF NOT EXISTS idx_comparisons_verdict ON comparisons(final_verdict);
-CREATE INDEX IF NOT EXISTS idx_comparisons_competitor ON comparisons(competitor_model);
-CREATE INDEX IF NOT EXISTS idx_comparisons_auto_loss ON comparisons(is_auto_loss);
-
-CREATE INDEX IF NOT EXISTS idx_votes_comparison ON judge_votes(comparison_id);
-CREATE INDEX IF NOT EXISTS idx_votes_judge ON judge_votes(judge_model);
-CREATE INDEX IF NOT EXISTS idx_votes_verdict ON judge_votes(verdict);
-
--- Views for common queries
-CREATE VIEW IF NOT EXISTS win_rates_by_competitor AS
-SELECT
-    competitor_model,
-    COUNT(*) as total,
-    SUM(CASE WHEN final_verdict = 'gemini_wins' THEN 1 ELSE 0 END) as gemini_wins,
-    SUM(CASE WHEN final_verdict = 'competitor_wins' THEN 1 ELSE 0 END) as competitor_wins,
-    SUM(CASE WHEN final_verdict = 'tie' THEN 1 ELSE 0 END) as ties,
-    CAST(SUM(CASE WHEN final_verdict = 'gemini_wins' THEN 1 ELSE 0 END) AS REAL) /
-        NULLIF(SUM(CASE WHEN final_verdict != 'tie' THEN 1 ELSE 0 END), 0) as gemini_win_rate
-FROM comparisons
-GROUP BY competitor_model;
-
-CREATE VIEW IF NOT EXISTS win_rates_by_occupation AS
-SELECT
-    p.occupation_code,
-    p.occupation_title,
-    c.competitor_model,
-    COUNT(*) as total,
-    SUM(CASE WHEN c.final_verdict = 'gemini_wins' THEN 1 ELSE 0 END) as gemini_wins,
-    CAST(SUM(CASE WHEN c.final_verdict = 'gemini_wins' THEN 1 ELSE 0 END) AS REAL) /
-        NULLIF(SUM(CASE WHEN c.final_verdict != 'tie' THEN 1 ELSE 0 END), 0) as gemini_win_rate
-FROM comparisons c
-JOIN prompts p ON c.prompt_id = p.prompt_id
-GROUP BY p.occupation_code, c.competitor_model;
-'''
-```
-
----
-
-## Part 6: Cross-Run Comparison (NEW)
-
-```python
-# src/analysis/cross_run.py
-
-from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
-from pathlib import Path
-import sqlite3
-import json
-from scipy import stats
+from collections import defaultdict
 import numpy as np
+from scipy import stats
 
 @dataclass
-class RunSummary:
-    run_id: str
-    timestamp: str
-    num_prompts: int
-    model_pairs: List[str]
+class Weakness:
+    dimension: str          # e.g., "occupation", "formality", "channel"
+    dimension_value: str    # e.g., "Legal", "Very Formal", "email"
+    win_rate: float
+    confidence_interval: tuple
+    n_samples: int
+    p_value: float
+    severity: str          # "critical", "moderate", "minor"
+    description: str
+    example_prompt_ids: List[str]
+
+@dataclass
+class WeaknessReport:
+    model_pair: str
+    total_comparisons: int
     overall_win_rate: float
-    win_rates_by_model: Dict[str, float]
+    weaknesses: List[Weakness]
+    strongest_areas: List[Weakness]
+    recommendations: List[str]
 
-@dataclass
-class CrossRunComparison:
-    run_a: RunSummary
-    run_b: RunSummary
-    win_rate_delta: Dict[str, float]  # Per model pair
-    is_significant: Dict[str, bool]   # Statistical significance
-    common_weaknesses: List[str]
-    divergent_results: List[str]      # Prompts with different outcomes
+class WeaknessFinder:
+    """Identify specific areas of weakness in Gemini vs competitors."""
 
-class CrossRunAnalyzer:
-    """
-    Compare results across multiple evaluation runs.
-    Per PROMPT.md: "Support comparing results across multiple runs"
-    """
+    DIMENSIONS = [
+        'occupation_title',
+        'writing_category',
+        'communication_channel',
+        'formality_level',
+        'urgency_level',
+        'emotional_context',
+        'job_zone',
+        'industry_name',
+        'is_sensitive',
+        'message_position',
+        'audience_size'
+    ]
 
-    def __init__(self, results_dirs: List[Path]):
-        self.results_dirs = results_dirs
-        self.runs: List[RunSummary] = []
+    WEAKNESS_THRESHOLD = 0.45  # Win rate below this is concerning
+    STRENGTH_THRESHOLD = 0.55  # Win rate above this is a strength
+    MIN_SAMPLES = 20           # Minimum samples for significance
 
-    def load_runs(self) -> List[RunSummary]:
-        """Load summaries from all runs."""
-        for run_dir in self.results_dirs:
-            summary = self._load_run_summary(run_dir)
-            if summary:
-                self.runs.append(summary)
-        return self.runs
+    def __init__(self, confidence_level: float = 0.95):
+        self.confidence_level = confidence_level
+        self.z_score = stats.norm.ppf((1 + confidence_level) / 2)
 
-    def _load_run_summary(self, run_dir: Path) -> Optional[RunSummary]:
-        """Load summary for a single run."""
-        db_path = run_dir / "results.db"
-        config_path = run_dir / "config.json"
-
-        if not db_path.exists():
-            return None
-
-        with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-
-            # Get overall stats
-            stats_query = """
-            SELECT
-                competitor_model,
-                COUNT(*) as total,
-                SUM(CASE WHEN final_verdict = 'gemini_wins' THEN 1 ELSE 0 END) as wins
-            FROM comparisons
-            GROUP BY competitor_model
-            """
-            rows = conn.execute(stats_query).fetchall()
-
-        win_rates = {}
-        total_wins = 0
-        total_decisive = 0
-
-        for row in rows:
-            decisive = row['total'] - conn.execute(
-                "SELECT COUNT(*) FROM comparisons WHERE competitor_model=? AND final_verdict='tie'",
-                (row['competitor_model'],)
-            ).fetchone()[0]
-            if decisive > 0:
-                win_rates[row['competitor_model']] = row['wins'] / decisive
-                total_wins += row['wins']
-                total_decisive += decisive
-
-        # Load config
-        config = {}
-        if config_path.exists():
-            with open(config_path) as f:
-                config = json.load(f)
-
-        return RunSummary(
-            run_id=run_dir.name,
-            timestamp=config.get('started_at', 'unknown'),
-            num_prompts=config.get('num_prompts', 0),
-            model_pairs=list(win_rates.keys()),
-            overall_win_rate=total_wins / total_decisive if total_decisive > 0 else 0.5,
-            win_rates_by_model=win_rates
-        )
-
-    def compare_runs(
+    def find_weaknesses(
         self,
-        run_a_id: str,
-        run_b_id: str
-    ) -> CrossRunComparison:
-        """Compare two specific runs."""
-        run_a = next((r for r in self.runs if r.run_id == run_a_id), None)
-        run_b = next((r for r in self.runs if r.run_id == run_b_id), None)
+        results: List[Dict[str, Any]],
+        model_pair: str
+    ) -> WeaknessReport:
+        """Find all weaknesses for a model pair."""
 
-        if not run_a or not run_b:
-            raise ValueError(f"Run not found: {run_a_id} or {run_b_id}")
+        # Filter to relevant model pair
+        pair_results = [r for r in results
+                       if f"{r['gemini_model']}_vs_{r['opponent_model']}" == model_pair]
 
-        # Calculate deltas
-        win_rate_delta = {}
-        is_significant = {}
+        if not pair_results:
+            return WeaknessReport(
+                model_pair=model_pair,
+                total_comparisons=0,
+                overall_win_rate=0.5,
+                weaknesses=[],
+                strongest_areas=[],
+                recommendations=[]
+            )
 
-        common_models = set(run_a.win_rates_by_model.keys()) & set(run_b.win_rates_by_model.keys())
+        # Overall stats
+        total = len(pair_results)
+        gemini_wins = sum(1 for r in pair_results if r['result'] == 'gemini_wins')
+        overall_win_rate = gemini_wins / total if total > 0 else 0.5
 
-        for model in common_models:
-            rate_a = run_a.win_rates_by_model[model]
-            rate_b = run_b.win_rates_by_model[model]
-            win_rate_delta[model] = rate_b - rate_a
+        weaknesses = []
+        strengths = []
 
-            # Two-proportion z-test for significance
-            # (simplified - would need actual counts for proper test)
-            is_significant[model] = abs(rate_b - rate_a) > 0.1
+        # Analyze each dimension
+        for dimension in self.DIMENSIONS:
+            dim_analysis = self._analyze_dimension(pair_results, dimension)
 
-        return CrossRunComparison(
-            run_a=run_a,
-            run_b=run_b,
-            win_rate_delta=win_rate_delta,
-            is_significant=is_significant,
-            common_weaknesses=[],
-            divergent_results=[]
+            for value, analysis in dim_analysis.items():
+                if analysis['n'] < self.MIN_SAMPLES:
+                    continue
+
+                if analysis['win_rate'] < self.WEAKNESS_THRESHOLD:
+                    severity = self._determine_severity(
+                        analysis['win_rate'],
+                        overall_win_rate
+                    )
+                    weaknesses.append(Weakness(
+                        dimension=dimension,
+                        dimension_value=str(value),
+                        win_rate=analysis['win_rate'],
+                        confidence_interval=(analysis['ci_lower'], analysis['ci_upper']),
+                        n_samples=analysis['n'],
+                        p_value=analysis['p_value'],
+                        severity=severity,
+                        description=self._describe_weakness(
+                            dimension, value, analysis['win_rate'], overall_win_rate
+                        ),
+                        example_prompt_ids=analysis['example_losses'][:5]
+                    ))
+
+                elif analysis['win_rate'] > self.STRENGTH_THRESHOLD:
+                    strengths.append(Weakness(
+                        dimension=dimension,
+                        dimension_value=str(value),
+                        win_rate=analysis['win_rate'],
+                        confidence_interval=(analysis['ci_lower'], analysis['ci_upper']),
+                        n_samples=analysis['n'],
+                        p_value=analysis['p_value'],
+                        severity='strength',
+                        description=self._describe_strength(
+                            dimension, value, analysis['win_rate']
+                        ),
+                        example_prompt_ids=analysis['example_wins'][:5]
+                    ))
+
+        # Sort by severity/win rate
+        weaknesses.sort(key=lambda w: w.win_rate)
+        strengths.sort(key=lambda w: -w.win_rate)
+
+        # Generate recommendations
+        recommendations = self._generate_recommendations(weaknesses, overall_win_rate)
+
+        return WeaknessReport(
+            model_pair=model_pair,
+            total_comparisons=total,
+            overall_win_rate=overall_win_rate,
+            weaknesses=weaknesses,
+            strongest_areas=strengths[:10],
+            recommendations=recommendations
         )
 
-    def find_consistent_weaknesses(self) -> Dict[str, List[str]]:
-        """Find weaknesses that appear consistently across runs."""
-        # Would analyze weakness patterns across all runs
-        return {}
+    def _analyze_dimension(
+        self,
+        results: List[Dict[str, Any]],
+        dimension: str
+    ) -> Dict[str, Dict[str, Any]]:
+        """Analyze win rates for each value in a dimension."""
+        by_value = defaultdict(lambda: {
+            'gemini_wins': 0, 'opponent_wins': 0, 'ties': 0,
+            'example_wins': [], 'example_losses': []
+        })
 
-    def generate_comparison_report(self) -> str:
-        """Generate markdown report comparing all runs."""
-        lines = ["# Cross-Run Comparison Report\n"]
+        for r in results:
+            value = r.get(dimension, 'unknown')
+            if value is None:
+                value = 'unknown'
 
-        for run in self.runs:
-            lines.append(f"## Run: {run.run_id}")
-            lines.append(f"- Prompts: {run.num_prompts}")
-            lines.append(f"- Overall Win Rate: {run.overall_win_rate:.1%}")
-            lines.append("")
-            for model, rate in run.win_rates_by_model.items():
-                lines.append(f"  - vs {model}: {rate:.1%}")
-            lines.append("")
+            if r['result'] == 'gemini_wins':
+                by_value[value]['gemini_wins'] += 1
+                by_value[value]['example_wins'].append(r['prompt_id'])
+            elif r['result'] == 'opponent_wins':
+                by_value[value]['opponent_wins'] += 1
+                by_value[value]['example_losses'].append(r['prompt_id'])
+            else:
+                by_value[value]['ties'] += 1
+
+        analysis = {}
+        for value, counts in by_value.items():
+            n = counts['gemini_wins'] + counts['opponent_wins']
+            if n == 0:
+                continue
+
+            win_rate = counts['gemini_wins'] / n
+
+            # Wilson score interval
+            ci_lower, ci_upper = self._wilson_interval(counts['gemini_wins'], n)
+
+            # Binomial test against 50%
+            result = stats.binomtest(counts['gemini_wins'], n, 0.5)
+
+            analysis[value] = {
+                'win_rate': win_rate,
+                'n': n,
+                'ci_lower': ci_lower,
+                'ci_upper': ci_upper,
+                'p_value': result.pvalue,
+                'example_wins': counts['example_wins'],
+                'example_losses': counts['example_losses']
+            }
+
+        return analysis
+
+    def _wilson_interval(self, successes: int, n: int) -> tuple:
+        """Calculate Wilson score confidence interval."""
+        if n == 0:
+            return (0.0, 1.0)
+
+        p = successes / n
+        denominator = 1 + self.z_score ** 2 / n
+        center = (p + self.z_score ** 2 / (2 * n)) / denominator
+        spread = self.z_score * np.sqrt(
+            (p * (1 - p) + self.z_score ** 2 / (4 * n)) / n
+        ) / denominator
+
+        return (max(0, center - spread), min(1, center + spread))
+
+    def _determine_severity(self, win_rate: float, overall: float) -> str:
+        """Determine severity of weakness."""
+        if win_rate < 0.35:
+            return 'critical'
+        elif win_rate < 0.40:
+            return 'moderate'
+        else:
+            return 'minor'
+
+    def _describe_weakness(
+        self,
+        dimension: str,
+        value: str,
+        win_rate: float,
+        overall: float
+    ) -> str:
+        """Generate human-readable weakness description."""
+        dim_names = {
+            'occupation_title': 'occupation',
+            'writing_category': 'writing type',
+            'communication_channel': 'communication channel',
+            'formality_level': 'formality level',
+            'job_zone': 'skill level',
+            'industry_name': 'industry',
+            'emotional_context': 'emotional context'
+        }
+        dim_name = dim_names.get(dimension, dimension.replace('_', ' '))
+
+        delta = (overall - win_rate) * 100
+        return (
+            f"Gemini underperforms by {delta:.1f}pp on {dim_name}='{value}' "
+            f"(win rate: {win_rate*100:.1f}% vs overall {overall*100:.1f}%)"
+        )
+
+    def _describe_strength(
+        self,
+        dimension: str,
+        value: str,
+        win_rate: float
+    ) -> str:
+        """Generate human-readable strength description."""
+        dim_names = {
+            'occupation_title': 'occupation',
+            'writing_category': 'writing type',
+            'communication_channel': 'channel',
+        }
+        dim_name = dim_names.get(dimension, dimension.replace('_', ' '))
+        return f"Strong performance on {dim_name}='{value}' (win rate: {win_rate*100:.1f}%)"
+
+    def _generate_recommendations(
+        self,
+        weaknesses: List[Weakness],
+        overall: float
+    ) -> List[str]:
+        """Generate actionable recommendations."""
+        recs = []
+
+        # Group weaknesses by dimension
+        by_dim = defaultdict(list)
+        for w in weaknesses:
+            by_dim[w.dimension].append(w)
+
+        # Critical weaknesses first
+        critical = [w for w in weaknesses if w.severity == 'critical']
+        if critical:
+            recs.append(
+                f"CRITICAL: Address severe underperformance in {len(critical)} areas "
+                f"where win rate is below 35%"
+            )
+
+        # Dimension-specific recommendations
+        for dim, weak_list in by_dim.items():
+            if len(weak_list) >= 3:
+                values = ', '.join(w.dimension_value for w in weak_list[:3])
+                recs.append(
+                    f"Systematic weakness in {dim.replace('_', ' ')}: "
+                    f"particularly {values}"
+                )
+
+        # Overall assessment
+        if overall < 0.45:
+            recs.append(
+                "Overall performance is below par - consider broad model improvements"
+            )
+        elif overall > 0.55:
+            recs.append(
+                "Good overall performance - focus on specific weak areas listed above"
+            )
+
+        return recs
+```
+
+---
+
+## 8. Directory Manager (Full Implementation)
+
+```python
+# src/storage/directory_manager.py
+from pathlib import Path
+from datetime import datetime
+import json
+import os
+
+class DirectoryManager:
+    """Manage the full directory structure for evaluation runs."""
+
+    def __init__(self, base_dir: str = "results"):
+        self.base_dir = Path(base_dir)
+        self.current_run_dir: Optional[Path] = None
+
+    def create_run_directory(self, preset_name: str = "") -> Path:
+        """Create a new timestamped run directory with full structure."""
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        run_dir = self.base_dir / f"eval_{timestamp}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create full directory structure
+        subdirs = [
+            'prompts',
+            'prompts/prompts_by_occupation',
+            'prompts/prompts_by_industry',
+            'responses',
+            'responses/by_prompt',
+            'responses/by_model',
+            'judgments',
+            'judgments/raw',
+            'judgments/aggregated',
+            'analysis',
+            'reports',
+            'reports/charts',
+            'logs'
+        ]
+
+        for subdir in subdirs:
+            (run_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+        # Create initial files
+        (run_dir / 'random_seed.txt').touch()
+        (run_dir / 'results_summary.csv').touch()
+
+        # Update symlink to latest
+        latest_link = self.base_dir / 'latest'
+        if latest_link.is_symlink():
+            latest_link.unlink()
+        latest_link.symlink_to(run_dir.name)
+
+        self.current_run_dir = run_dir
+        return run_dir
+
+    def save_config(self, config: dict):
+        """Save configuration to run directory."""
+        if not self.current_run_dir:
+            raise ValueError("No run directory created")
+
+        # JSON config
+        with open(self.current_run_dir / 'config.json', 'w') as f:
+            json.dump(config, f, indent=2, default=str)
+
+        # Human-readable summary
+        summary = self._generate_config_summary(config)
+        (self.current_run_dir / 'config_summary.txt').write_text(summary)
+
+    def save_random_seed(self, seed: int):
+        """Save random seed for reproducibility."""
+        if self.current_run_dir:
+            (self.current_run_dir / 'random_seed.txt').write_text(str(seed))
+
+    def save_prompt_by_occupation(self, prompt: dict, occupation_code: str):
+        """Save prompt organized by occupation."""
+        if not self.current_run_dir:
+            return
+
+        occ_dir = self.current_run_dir / 'prompts' / 'prompts_by_occupation' / occupation_code[:2]
+        occ_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(occ_dir / f"{prompt['prompt_id']}.json", 'w') as f:
+            json.dump(prompt, f, indent=2)
+
+    def save_prompt_by_industry(self, prompt: dict, naics_code: str):
+        """Save prompt organized by industry."""
+        if not self.current_run_dir:
+            return
+
+        ind_dir = self.current_run_dir / 'prompts' / 'prompts_by_industry' / naics_code[:2]
+        ind_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(ind_dir / f"{prompt['prompt_id']}.json", 'w') as f:
+            json.dump(prompt, f, indent=2)
+
+    def save_response_by_prompt(self, prompt_id: str, model: str, response: dict):
+        """Save response organized by prompt."""
+        if not self.current_run_dir:
+            return
+
+        prompt_dir = self.current_run_dir / 'responses' / 'by_prompt' / prompt_id
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(prompt_dir / f"{model}.json", 'w') as f:
+            json.dump(response, f, indent=2)
+
+    def save_response_by_model(self, prompt_id: str, model: str, response: dict):
+        """Save response organized by model."""
+        if not self.current_run_dir:
+            return
+
+        model_dir = self.current_run_dir / 'responses' / 'by_model' / model
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(model_dir / f"{prompt_id}.json", 'w') as f:
+            json.dump(response, f, indent=2)
+
+    def save_raw_judgment(self, judgment: dict):
+        """Save raw judgment."""
+        if not self.current_run_dir:
+            return
+
+        raw_dir = self.current_run_dir / 'judgments' / 'raw'
+        filename = f"{judgment['prompt_id']}_{judgment['judge_model']}_{judgment.get('vote_idx', 0)}.json"
+
+        with open(raw_dir / filename, 'w') as f:
+            json.dump(judgment, f, indent=2)
+
+    def save_aggregated_judgment(self, prompt_id: str, aggregated: dict):
+        """Save aggregated judgment for a comparison."""
+        if not self.current_run_dir:
+            return
+
+        agg_dir = self.current_run_dir / 'judgments' / 'aggregated'
+        with open(agg_dir / f"{prompt_id}.json", 'w') as f:
+            json.dump(aggregated, f, indent=2)
+
+    def save_analysis(self, filename: str, data: dict):
+        """Save analysis result."""
+        if not self.current_run_dir:
+            return
+
+        with open(self.current_run_dir / 'analysis' / filename, 'w') as f:
+            json.dump(data, f, indent=2)
+
+    def generate_readme(self, config: dict, results_summary: dict):
+        """Generate README.md for the run."""
+        if not self.current_run_dir:
+            return
+
+        readme = f"""# Evaluation Run: {self.current_run_dir.name}
+
+## Configuration
+- Preset: {config.get('preset_name', 'Custom')}
+- Prompts: {config.get('num_prompts', 'N/A')}
+- Model pairs: {len(config.get('model_pairs', []))}
+- Random seed: {config.get('random_seed', 'N/A')}
+
+## Results Summary
+- Total comparisons: {results_summary.get('total_comparisons', 0)}
+- Overall Gemini win rate: {results_summary.get('overall_win_rate', 0.5)*100:.1f}%
+
+## Directory Structure
+- `prompts/` - All generated prompts
+- `responses/` - Model responses organized by prompt and model
+- `judgments/` - Raw and aggregated judge verdicts
+- `analysis/` - Statistical analysis results
+- `reports/` - Generated reports and charts
+- `logs/` - Execution logs
+
+## Files
+- `config.json` - Full configuration
+- `results.db` - SQLite database with all data
+- `checkpoint.json` - Resume state
+
+Generated: {datetime.now().isoformat()}
+"""
+        (self.current_run_dir / 'README.md').write_text(readme)
+
+    def _generate_config_summary(self, config: dict) -> str:
+        """Generate human-readable config summary."""
+        lines = [
+            "=" * 60,
+            "EVALUATION CONFIGURATION SUMMARY",
+            "=" * 60,
+            "",
+            f"Preset: {config.get('preset_name', 'Custom')}",
+            f"Number of prompts: {config.get('num_prompts', 'N/A')}",
+            f"Random seed: {config.get('random_seed', 'N/A')}",
+            "",
+            "Models to evaluate:",
+        ]
+
+        for pair in config.get('model_pairs', []):
+            lines.append(f"  - {pair[0]} vs {pair[1]}")
+
+        lines.extend([
+            "",
+            "Judge configuration:",
+            f"  - Judge models: {', '.join(config.get('judge_models', []))}",
+            f"  - Votes per judge: {config.get('votes_per_judge', 5)}",
+            f"  - Judge personas: {', '.join(config.get('judge_personas', []))}",
+            "",
+            "=" * 60
+        ])
 
         return "\n".join(lines)
 ```
 
 ---
 
-## Part 7: Cost Estimation Implementation (Fixed)
+## 9. Summary of Improvements
 
-```python
-# src/config.py
+### Critical Fixes
+1. **O*NET Reference Integration**: Now reads from ONET_WRITING_REFERENCE.md instead of hardcoding categories
+2. **Phase 1 Implementation**: Full offline LLM generation for persona variations
+3. **Phase 3 Implementation**: Full LLM enrichment with attachments, prior messages, competing objectives
+4. **Response Analyzer**: Complete format/pattern detection with cliche and AI marker analysis
+5. **Refusal Detector**: Full categorization of refusal types
+6. **Weakness Finder**: Comprehensive weakness analysis across all dimensions
+7. **Directory Manager**: Full directory structure as specified in PROMPT.md
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
-from pathlib import Path
-import yaml
+### Bug Fixes
+1. Fixed duplicate token values in database saves
+2. Fixed incorrect cost splitting
+3. Added proper async database operations with aiosqlite
+4. Fixed non-portable hash for randomization
+5. Added per-model rate limiting
 
-@dataclass
-class CostEstimate:
-    """Detailed cost breakdown for an evaluation run."""
-    prompts: int
-    model_pairs: int
-    total_comparisons: int
+### Design Improvements
+1. External company database in JSON
+2. Census-based name generation
+3. Parallel API call batching
+4. Circuit breaker pattern for API resilience
+5. WeasyPrint for better PDF generation
 
-    # Judge configuration
-    judge_config: str
-    total_judge_calls: int
-
-    # Cost estimates (low/high range)
-    response_cost_low: float
-    response_cost_high: float
-    judge_cost_low: float
-    judge_cost_high: float
-    total_cost_low: float
-    total_cost_high: float
-
-    # Time estimates
-    time_with_limits: str
-    time_parallel: str
-
-def estimate_cost(config: 'EvalConfig') -> CostEstimate:
-    """
-    Calculate detailed cost and time estimates for an evaluation run.
-    Uses verified OpenRouter pricing when available.
-    """
-    num_prompts = config.num_prompts
-    num_pairs = len(config.model_pairs)
-    total_comparisons = num_prompts * num_pairs
-
-    # Judge configuration
-    num_judges = len(config.judge_models)
-    votes_per_judge = config.votes_per_judge
-    personas = 2 if config.use_both_personas else 1
-    total_judge_calls = total_comparisons * num_judges * votes_per_judge * personas
-
-    judge_config = f"{num_judges} judges x {votes_per_judge} votes x {personas} personas"
-
-    # Token estimates (based on typical writing tasks)
-    avg_prompt_tokens = 800   # Input tokens per prompt
-    avg_response_tokens = 400  # Output tokens per response
-    avg_judge_input = 1500     # Judge prompt with both responses
-    avg_judge_output = 300     # Judge verdict
-
-    # Model pricing (per 1M tokens) - would use verified prices if available
-    # Using conservative estimates
-    response_model_cost = {
-        'input': 5.0,   # Average across models
-        'output': 15.0
-    }
-    judge_model_cost = {
-        'input': 10.0,  # Judges tend to be premium models
-        'output': 30.0
-    }
-
-    # Response generation cost
-    response_input_tokens = num_prompts * avg_prompt_tokens * 2  # Both models
-    response_output_tokens = num_prompts * avg_response_tokens * 2
-
-    response_cost_base = (
-        response_input_tokens * response_model_cost['input'] +
-        response_output_tokens * response_model_cost['output']
-    ) / 1_000_000
-
-    # Add 20% variance for low/high
-    response_cost_low = response_cost_base * 0.8 * num_pairs
-    response_cost_high = response_cost_base * 1.2 * num_pairs
-
-    # Judging cost
-    judge_input_tokens = total_judge_calls * avg_judge_input
-    judge_output_tokens = total_judge_calls * avg_judge_output
-
-    judge_cost_base = (
-        judge_input_tokens * judge_model_cost['input'] +
-        judge_output_tokens * judge_model_cost['output']
-    ) / 1_000_000
-
-    judge_cost_low = judge_cost_base * 0.8
-    judge_cost_high = judge_cost_base * 1.2
-
-    # Total
-    total_cost_low = response_cost_low + judge_cost_low
-    total_cost_high = response_cost_high + judge_cost_high
-
-    # Time estimates
-    # Assume ~2 seconds per API call average, rate limits of ~60 calls/min
-    total_api_calls = total_comparisons * 2 + total_judge_calls  # Responses + judges
-
-    # With rate limits (sequential)
-    time_rate_limited_seconds = total_api_calls * 1.5  # 1.5s average with limits
-    time_with_limits = _format_duration(time_rate_limited_seconds)
-
-    # Parallelized (assume 10x speedup but bounded by rate limits)
-    time_parallel_seconds = time_rate_limited_seconds / 5
-    time_parallel = _format_duration(time_parallel_seconds)
-
-    return CostEstimate(
-        prompts=num_prompts,
-        model_pairs=num_pairs,
-        total_comparisons=total_comparisons,
-        judge_config=judge_config,
-        total_judge_calls=total_judge_calls,
-        response_cost_low=response_cost_low,
-        response_cost_high=response_cost_high,
-        judge_cost_low=judge_cost_low,
-        judge_cost_high=judge_cost_high,
-        total_cost_low=total_cost_low,
-        total_cost_high=total_cost_high,
-        time_with_limits=time_with_limits,
-        time_parallel=time_parallel
-    )
-
-def _format_duration(seconds: float) -> str:
-    """Format seconds as human-readable duration."""
-    if seconds < 60:
-        return f"{int(seconds)} sec"
-    elif seconds < 3600:
-        return f"{int(seconds/60)} min"
-    else:
-        hours = int(seconds / 3600)
-        mins = int((seconds % 3600) / 60)
-        return f"{hours}h {mins}m" if mins else f"{hours} hrs"
-```
+### Additional Features
+1. Cross-run comparison implementation
+2. CSV/JSON export functionality
+3. Full TUI interactive controls
+4. Live cost tracking
+5. Auto-generated README.md for each run
 
 ---
 
-## Part 8: Implementation Roadmap (Revised)
+## 10. Implementation Priority
 
-### Phase 1: Foundation (Week 1)
-1. Set up project structure with pyproject.toml
-2. Implement `OnetLoader` **without hardcoded categories**
-3. Implement `OnetReferenceParser` to use Opus's guidance
-4. Implement `NAICSMapper` with SOC-to-NAICS mapping
-5. Implement `CompanyDatabase` with international coverage
-6. Implement `NameGenerator` with regional variants
-7. Create Pydantic schemas for all data models
-8. Unit tests for data layer
+### Phase 1 (Week 1-2): Foundation + Critical Fixes
+1. Set up project structure with all directories
+2. Implement O*NET extractor using reference document
+3. Build OpenRouter client with per-model rate limiting
+4. Implement Phase 1 offline generation
+5. Create basic prompt generator
 
-### Phase 2: Prompt Generation (Week 2)
-1. Implement Phase 1 LLM persona generation
-2. Implement Phase 2 algorithmic combination (no hardcoded categories)
-3. Implement Phase 3 LLM enrichment
-4. **NEW**: Implement `RevisionTaskGenerator`
-5. **NEW**: Implement `ConstraintGenerator`
-6. **NEW**: Implement `AmbiguityGenerator`
-7. Create `PromptGenerator` orchestrator with type distribution
-8. Test prompt diversity and quality
-9. Generate sample prompt sets for validation
+### Phase 2 (Week 2-3): Core Evaluation
+1. Implement Phase 3 LLM enrichment
+2. Build evaluation engine with refusal detection
+3. Implement response analyzer
+4. Create judge manager with full context
+5. Build vote aggregator
 
-### Phase 3: Evaluation Core (Week 3)
-1. Implement `OpenRouterClient` with model verification
-2. Implement `JudgePanel` with **full persona context**
-3. Implement `VoteAggregator` with majority-of-majorities
-4. **NEW**: Implement `ResponseAnalyzer` for structure analysis
-5. **NEW**: Implement `ConstraintChecker` for compliance tracking
-6. Implement `CheckpointManager` with complete schema
-7. Implement `EvalRunner` orchestrator
-8. Integration tests with mock API
+### Phase 3 (Week 3-4): Storage + Analysis
+1. Implement full directory manager
+2. Build async SQLite database layer
+3. Create checkpoint/resume system
+4. Implement weakness finder
+5. Build bias detector with all types
 
-### Phase 4: Analysis & Reporting (Week 4)
-1. Implement `StatisticalAnalyzer` with proper confidence intervals
-2. Implement `BiasDetector` for position, length, model biases
-3. Implement `WeaknessFinder` with database joins
-4. **NEW**: Implement `CrossRunAnalyzer` for multi-run comparison
-5. **NEW**: Implement regional variant analysis
-6. Create visualization functions with plotly
-7. Implement `PDFReportGenerator`
-8. Design and test report templates
+### Phase 4 (Week 4-5): TUI + Reporting
+1. Build progress dashboard TUI
+2. Implement results viewer TUI
+3. Create PDF report generator
+4. Build chart generation
+5. Implement CSV export
 
-### Phase 5: TUI & CLI (Week 5)
-1. Implement `ProgressDashboard` with all required elements
-2. Implement `ResultsViewer` with filtering/sorting
-3. Create CLI with click
-4. Implement preset configurations
-5. **NEW**: Implement `estimate_cost()` with real pricing
-6. **NEW**: Implement `--compare` command for cross-run analysis
-7. End-to-end testing
-
-### Phase 6: Polish & Documentation (Week 6)
-1. Comprehensive testing with real API calls
-2. Verify model IDs against OpenRouter
+### Phase 5 (Week 5-6): Polish
+1. Cross-run comparison
+2. Full test coverage
 3. Performance optimization
 4. Documentation
-5. Example runs and validation
-6. Bug fixes and refinements
-
----
-
-## Summary of Key Improvements
-
-| Issue | Original Draft | Improved Plan |
-|-------|----------------|---------------|
-| Hardcoded categories | 10 fixed `WritingCategory` enum | No categories - LLM infers dynamically |
-| Instruction following | Schema only, no implementation | Full `ConstraintGenerator` + `ConstraintChecker` |
-| Revision tasks | Not implemented | `RevisionTaskGenerator` with sample drafts |
-| Tone matching | Schema only | Integrated into prompt generation |
-| CC recipients | Schema only | Generation logic for mixed audiences |
-| Cost estimation | Function stub | Full implementation with pricing |
-| Judge context | Basic name/title | Full persona (age, generation, skill) |
-| Regional variants | Schema only | Full international support |
-| Ambiguity handling | Schema only | `AmbiguityGenerator` + assessment |
-| Response metadata | Token count only | Full structure analysis |
-| Database schema | Missing prompts table | Complete schema with views |
-| Cross-run comparison | CLI stub only | Full `CrossRunAnalyzer` |
-| Model verification | Hardcoded IDs | Dynamic verification via API |
-| O*NET reference | Not used | Integrated parser |
-
-This improved plan addresses all identified issues from the original draft while maintaining the core architecture and providing comprehensive coverage of PROMPT.md requirements.
+5. Error handling refinement
