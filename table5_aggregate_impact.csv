@@ -1,0 +1,8 @@
+category,task_count,pct_of_tasks,wage_impact_B,gdp_impact_B
+Agentic AI (Tier 2),9167,48.8,4803.85,8406.74
+RAG Only (Tier 1),3829,20.4,853.53,1493.68
+Physical + Knowledge Component,2316,12.3,415.01,726.27
+Human Critical Judgment,97,0.5,15.03,26.3
+Physical Only (Not Acceleratable),1445,7.7,0.0,0.0
+Unclassified (Not Acceleratable),1942,10.3,0.0,0.0
+TOTAL ACCELERATABLE,15409,81.99999999999999,6087.42,10652.99

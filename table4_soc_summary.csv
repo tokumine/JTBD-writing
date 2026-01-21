@@ -1,0 +1,23 @@
+soc_major,group_name,total_tasks,rag_tasks,agent_tasks,employment,wage_impact_B,gdp_impact_B
+11,Management,1214,247,815,10913500,1225.1,2143.92
+29,Healthcare Practitioners and Technical,1721,466,949,9177810,1016.45,1778.78
+13,Business and Financial Operations,994,212,663,9805460,758.9,1328.08
+15,Computer and Mathematical,770,95,565,5192870,616.63,1079.1
+43,Office and Administrative Support,971,220,568,17839840,436.93,764.63
+17,Architecture and Engineering,1245,138,831,2551210,348.53,609.92
+41,Sales and Related,425,143,204,13252600,270.72,473.76
+25,Educational Instruction and Library,1636,511,908,6932100,203.33,355.83
+53,Transportation and Material Moving,917,176,344,12952080,176.93,309.63
+35,Food Preparation and Serving,319,98,77,13500330,169.82,297.18
+47,Construction and Extraction,1141,120,168,6293140,126.0,220.5
+51,Production,2117,271,616,6636030,107.33,187.83
+33,Protective Service,522,140,230,3634460,105.47,184.57
+49,"Installation, Maintenance, Repair",1008,93,201,6035350,98.9,173.07
+27,"Arts, Design, Entertainment, Sports, Media",806,162,503,2030020,89.08,155.88
+19,"Life, Physical, and Social Science",1227,287,787,1439460,86.02,150.53
+31,Healthcare Support,343,78,152,3459860,61.99,108.49
+23,Legal,123,37,65,1226030,61.98,108.47
+21,Community and Social Service,292,78,183,1908420,54.06,94.61
+39,Personal Care and Service,617,180,230,3025540,44.48,77.85
+37,Building and Grounds Cleaning,168,31,42,4466210,23.12,40.45
+45,"Farming, Fishing, and Forestry",220,46,66,433840,5.65,9.88

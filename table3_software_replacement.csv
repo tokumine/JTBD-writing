@@ -1,0 +1,15 @@
+software_category,unique_tools,occupations_using,ai_replacement_potential,wage_impact_B,gdp_impact_B
+Other Software,6732,909,30%,6085.3,10649.27
+Spreadsheets (Excel/Sheets),63,864,70%,5807.61,10163.32
+Statistical/Analytics,979,758,70%,5708.62,9990.08
+Word Processing,77,804,70%,5699.1,9973.43
+Email/Communication,15,721,50%,5339.81,9344.67
+Databases,261,545,70%,5195.96,9092.93
+Presentations,13,633,70%,4989.9,8732.33
+ERP/Business Systems,177,406,50%,4426.79,7746.89
+Project Management,38,226,70%,3505.68,6134.93
+Visualization,101,219,70%,2950.01,5162.52
+CAD/Engineering,112,252,30%,2199.09,3848.41
+Graphics/Design,123,231,50%,2098.7,3672.73
+Web/Browser,80,131,50%,1961.0,3431.75
+CRM,14,95,50%,1685.92,2950.35
